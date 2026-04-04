@@ -164,9 +164,10 @@ class AudioRouter:
         channels: int = 1,
     ) -> None:
         self.close_output_streams()
-        for dev_id in (primary_device_id, secondary_device_id):
-            if dev_id is None and dev_id is secondary_device_id:
-                continue
+        device_ids = [primary_device_id]
+        if secondary_device_id is not None:
+            device_ids.append(secondary_device_id)
+        for dev_id in device_ids:
             try:
                 stream = sd.RawOutputStream(
                     device=dev_id,

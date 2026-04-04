@@ -272,13 +272,6 @@ class WebRTCPanel(QWidget):
         else:
             source = self._source_combo.currentData() or "original"
 
-            if source == "translated" and not self._cfg.config.output_device_name:
-                self._log.add_message(
-                    "Translated audio requires an explicit output device. "
-                    "Select one in Audio \u2192 Output above.",
-                    "warning",
-                )
-
             dev = self._audio_router.find_device_by_name(
                 self._cfg.config.input_device_name, DeviceDirection.INPUT
             )

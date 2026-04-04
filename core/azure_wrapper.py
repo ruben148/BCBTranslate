@@ -325,15 +325,20 @@ class AzureTranslationService(QObject):
     # -- synthesis (TTS) ---------------------------------------------------
 
     def build_synthesizer(self) -> speechsdk.SpeechSynthesizer:
-        """Build a synthesizer. Uses output streams if dual output is configured,
-        otherwise uses the selected output device or default speaker."""
+        """Build a synthesizer.
+
+        Always routes TTS audio through ``AudioRouter.write_output()`` so
+        that output listeners (e.g. the WebRTC streamer) receive the PCM
+        data regardless of which output device is selected.  When no
+        explicit output device is configured the system default is used.
+        """
         speech_config = speechsdk.SpeechConfig(
             subscription=self._speech_key,
             region=self._speech_region,
         )
         speech_config.speech_synthesis_voice_name = self._config.voice_name
         speech_config.set_speech_synthesis_output_format(
-            speechsdk.SpeechSynthesisOutputFormat.Riff16Khz16BitMonoPcm
+            speechsdk.SpeechSynthesisOutputFormat.Raw16Khz16BitMonoPcm
         )
 
         out_name = self._config.output_device_name
@@ -341,57 +346,32 @@ class AzureTranslationService(QObject):
         out_dev = self._audio_router.find_device_by_name(out_name, DeviceDirection.OUTPUT)
         sec_dev = self._audio_router.find_device_by_name(sec_name, DeviceDirection.OUTPUT)
 
-        if sec_dev is not None and out_dev is not None:
-            # Dual output via push stream → audio_router writes to both devices
-            self._audio_router.open_output_streams(
-                primary_device_id=out_dev.device_id,
-                secondary_device_id=sec_dev.device_id,
-                sample_rate=self._config.sample_rate,
-                channels=self._config.channels,
-            )
+        primary_id = out_dev.device_id if out_dev else None
+        secondary_id = sec_dev.device_id if sec_dev else None
 
-            class _OutputCallback(speechsdk.audio.PushAudioOutputStreamCallback):
-                def __init__(self, router: AudioRouter):
-                    super().__init__()
-                    self._router = router
+        self._audio_router.open_output_streams(
+            primary_device_id=primary_id,
+            secondary_device_id=secondary_id,
+            sample_rate=self._config.sample_rate,
+            channels=self._config.channels,
+        )
 
-                def write(self, audio_buffer: memoryview) -> int:
-                    data = bytes(audio_buffer)
-                    self._router.write_output(data)
-                    return len(data)
+        class _OutputCallback(speechsdk.audio.PushAudioOutputStreamCallback):
+            def __init__(self, router: AudioRouter):
+                super().__init__()
+                self._router = router
 
-                def close(self):
-                    pass
+            def write(self, audio_buffer: memoryview) -> int:
+                data = bytes(audio_buffer)
+                self._router.write_output(data)
+                return len(data)
 
-            callback = _OutputCallback(self._audio_router)
-            push_stream = speechsdk.audio.PushAudioOutputStream(callback)
-            audio_output = speechsdk.audio.AudioOutputConfig(stream=push_stream)
-        elif out_dev is not None:
-            # Single non-default output via push stream
-            self._audio_router.open_output_streams(
-                primary_device_id=out_dev.device_id,
-                sample_rate=self._config.sample_rate,
-                channels=self._config.channels,
-            )
+            def close(self):
+                pass
 
-            class _SingleCallback(speechsdk.audio.PushAudioOutputStreamCallback):
-                def __init__(self, router: AudioRouter):
-                    super().__init__()
-                    self._router = router
-
-                def write(self, audio_buffer: memoryview) -> int:
-                    data = bytes(audio_buffer)
-                    self._router.write_output(data)
-                    return len(data)
-
-                def close(self):
-                    pass
-
-            callback = _SingleCallback(self._audio_router)
-            push_stream = speechsdk.audio.PushAudioOutputStream(callback)
-            audio_output = speechsdk.audio.AudioOutputConfig(stream=push_stream)
-        else:
-            audio_output = speechsdk.audio.AudioOutputConfig(use_default_speaker=True)
+        callback = _OutputCallback(self._audio_router)
+        push_stream = speechsdk.audio.PushAudioOutputStream(callback)
+        audio_output = speechsdk.audio.AudioOutputConfig(stream=push_stream)
 
         self._synthesizer = speechsdk.SpeechSynthesizer(
             speech_config=speech_config,
