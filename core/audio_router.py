@@ -15,8 +15,13 @@ logger = logging.getLogger(__name__)
 class AudioRouter:
     """Enumerate audio devices, manage input/output streams, provide VU levels."""
 
+    _INPUT_RATE = 48_000
+    _INPUT_BLOCKSIZE = 960  # 20 ms at 48 kHz
+
     def __init__(self):
         self._input_stream: sd.InputStream | None = None
+        self._input_device_id: int | None = None
+        self._vu_active = False
         self._output_streams: list[sd.RawOutputStream] = []
         self._vu_callback: Callable[[float], None] | None = None
         self._vu_lock = threading.Lock()
@@ -24,6 +29,8 @@ class AudioRouter:
         self._gain: float = 1.0
         self._output_listeners: list[Callable[[bytes], None]] = []
         self._output_listeners_lock = threading.Lock()
+        self._input_listeners: list[Callable] = []
+        self._input_listeners_lock = threading.Lock()
 
     # -- device enumeration ------------------------------------------------
 
@@ -117,33 +124,63 @@ class AudioRouter:
     def start_vu_stream(
         self, device_id: int | None, callback: Callable[[float], None] | None = None
     ) -> None:
-        self.stop_vu_stream()
         self._vu_callback = callback
+        self._vu_active = True
+        self._ensure_input_stream(device_id)
+
+    def stop_vu_stream(self) -> None:
+        self._vu_callback = None
+        self._vu_active = False
+        with self._vu_lock:
+            self._current_rms = 0.0
+        self._maybe_stop_input_stream()
+
+    # -- shared input stream -----------------------------------------------
+
+    def _ensure_input_stream(self, device_id: int | None) -> None:
+        if (
+            self._input_stream is not None
+            and self._input_device_id == device_id
+        ):
+            return
+        self._close_input_stream()
 
         def _audio_cb(indata, frames, time_info, status):
             if status:
-                logger.debug("VU stream status: %s", status)
+                logger.debug("Input stream status: %s", status)
             rms = float(np.sqrt(np.mean((indata * self._gain) ** 2)))
             with self._vu_lock:
                 self._current_rms = rms
-            if self._vu_callback:
-                self._vu_callback(rms)
+            cb = self._vu_callback
+            if cb is not None:
+                cb(rms)
+            with self._input_listeners_lock:
+                for listener in self._input_listeners:
+                    try:
+                        listener(indata)
+                    except Exception:
+                        logger.debug("Input listener error", exc_info=True)
 
         try:
             self._input_stream = sd.InputStream(
                 device=device_id,
                 channels=1,
-                samplerate=16000,
+                samplerate=self._INPUT_RATE,
                 dtype="float32",
-                blocksize=1024,
+                blocksize=self._INPUT_BLOCKSIZE,
                 callback=_audio_cb,
             )
             self._input_stream.start()
-            logger.info("VU meter stream started (device=%s)", device_id)
+            self._input_device_id = device_id
+            logger.info(
+                "Shared input stream started (device=%s, %d Hz)",
+                device_id,
+                self._INPUT_RATE,
+            )
         except Exception:
-            logger.exception("Failed to start VU meter stream")
+            logger.exception("Failed to start shared input stream")
 
-    def stop_vu_stream(self) -> None:
+    def _close_input_stream(self) -> None:
         if self._input_stream is not None:
             try:
                 self._input_stream.stop()
@@ -151,8 +188,27 @@ class AudioRouter:
             except Exception:
                 pass
             self._input_stream = None
-            with self._vu_lock:
-                self._current_rms = 0.0
+
+    def _maybe_stop_input_stream(self) -> None:
+        with self._input_listeners_lock:
+            has_listeners = len(self._input_listeners) > 0
+        if not has_listeners and not self._vu_active:
+            self._close_input_stream()
+
+    def add_input_listener(
+        self, callback: Callable, device_id: int | None = None,
+    ) -> None:
+        with self._input_listeners_lock:
+            if callback not in self._input_listeners:
+                self._input_listeners.append(callback)
+        if self._input_stream is None and device_id is not None:
+            self._ensure_input_stream(device_id)
+
+    def remove_input_listener(self, callback: Callable) -> None:
+        with self._input_listeners_lock:
+            if callback in self._input_listeners:
+                self._input_listeners.remove(callback)
+        self._maybe_stop_input_stream()
 
     # -- output streams for dual output ------------------------------------
 
@@ -217,5 +273,9 @@ class AudioRouter:
     # -- cleanup -----------------------------------------------------------
 
     def shutdown(self) -> None:
-        self.stop_vu_stream()
+        self._vu_active = False
+        self._vu_callback = None
+        with self._input_listeners_lock:
+            self._input_listeners.clear()
+        self._close_input_stream()
         self.close_output_streams()

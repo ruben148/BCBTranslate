@@ -7,3 +7,6 @@ pynput>=1.7
 
 # WebRTC streaming (fallback backend — used only when FFmpeg is not available)
 aiortc>=1.9
+
+# Development / tests
+pytest>=8.0

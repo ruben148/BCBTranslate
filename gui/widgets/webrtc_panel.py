@@ -284,7 +284,7 @@ class WebRTCPanel(QWidget):
                 input_device_id=device_id,
                 sample_rate=self._cfg.config.sample_rate,
                 gain=self._cfg.config.input_gain,
-                preferred_backend=self._backend_combo.currentData() or "auto",
+                preferred_backend=self._backend_combo.currentData() or "ffmpeg",
             )
 
     @pyqtSlot(str)

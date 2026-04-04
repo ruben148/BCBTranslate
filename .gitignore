@@ -15,6 +15,7 @@ env/
 
 # Secrets
 .env
+tests/secrets/whip_endpoint.txt
 
 # IDE
 .vscode/
