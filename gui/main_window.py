@@ -4,7 +4,7 @@ import logging
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -57,6 +57,12 @@ def _icon_path() -> Path:
 STYLE_DIR = _resource_dir()
 
 
+class _VuLevelBridge(QObject):
+    """Carries RMS from the PortAudio callback thread into the Qt GUI thread."""
+
+    level_changed = pyqtSignal(float)
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -81,6 +87,8 @@ class MainWindow(QMainWindow):
         self._webrtc_streamer = WebRTCStreamer(audio_router, parent=self)
 
         self._build_ui()
+        self._vu_level_bridge = _VuLevelBridge(self)
+        self._vu_level_bridge.level_changed.connect(self._vu_meter.set_level)
         self._connect_signals()
         self._apply_theme()
         self._restore_device_selections()
@@ -428,7 +436,10 @@ class MainWindow(QMainWindow):
             return
         dev = self._input_selector.selected_device()
         dev_id = dev.device_id if dev else None
-        self._audio_router.start_vu_stream(dev_id, callback=self._vu_meter.set_level)
+        self._audio_router.start_vu_stream(
+            dev_id,
+            callback=lambda rms: self._vu_level_bridge.level_changed.emit(rms),
+        )
 
     # -- gain --------------------------------------------------------------
 
