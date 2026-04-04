@@ -8,7 +8,6 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QCheckBox,
-    QDoubleSpinBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -17,7 +16,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
-    QSpinBox,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -31,6 +29,7 @@ from core.updater import UpdateChecker, UpdateInfo, prompt_and_install
 from gui.settings_dialog import SettingsDialog
 from gui.tray import TrayIcon
 from gui.widgets.device_selector import DeviceSelector
+from gui.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox, NoScrollSpinBox
 from gui.widgets.lag_indicator import LagIndicator
 from gui.widgets.log_panel import LogPanel
 from gui.widgets.vu_meter import VUMeter
@@ -202,7 +201,7 @@ class MainWindow(QMainWindow):
         # Silence timeout
         silence_row = QHBoxLayout()
         silence_row.addWidget(QLabel("Silence:"))
-        self._seg_timeout_spin = QSpinBox()
+        self._seg_timeout_spin = NoScrollSpinBox()
         self._seg_timeout_spin.setRange(100, 5000)
         self._seg_timeout_spin.setSingleStep(100)
         self._seg_timeout_spin.setSuffix(" ms")
@@ -230,7 +229,7 @@ class MainWindow(QMainWindow):
         # Target min / max row
         thresh_row = QHBoxLayout()
         thresh_row.addWidget(QLabel("Target min:"))
-        self._auto_seg_min_spin = QDoubleSpinBox()
+        self._auto_seg_min_spin = NoScrollDoubleSpinBox()
         self._auto_seg_min_spin.setRange(1.0, 30.0)
         self._auto_seg_min_spin.setSingleStep(1.0)
         self._auto_seg_min_spin.setDecimals(1)
@@ -242,7 +241,7 @@ class MainWindow(QMainWindow):
 
         thresh_row.addSpacing(10)
         thresh_row.addWidget(QLabel("Target max:"))
-        self._auto_seg_max_spin = QDoubleSpinBox()
+        self._auto_seg_max_spin = NoScrollDoubleSpinBox()
         self._auto_seg_max_spin.setRange(5.0, 55.0)
         self._auto_seg_max_spin.setSingleStep(1.0)
         self._auto_seg_max_spin.setDecimals(1)
