@@ -23,8 +23,11 @@ class LogPanel(QWidget):
         self._text.setFont(self._text.font())
         layout.addWidget(self._text)
 
+        self._has_partial = False
+
     @pyqtSlot(str, str, int)
     def add_translation(self, source: str, translated: str, lag_ms: int = 0) -> None:
+        self._remove_partial()
         ts = datetime.now().strftime("%H:%M:%S")
         lag_str = f"  ({lag_ms / 1000:.1f}s)" if lag_ms > 0 else ""
 
@@ -34,8 +37,10 @@ class LogPanel(QWidget):
 
     @pyqtSlot(str)
     def add_partial(self, text: str) -> None:
+        self._remove_partial()
         ts = datetime.now().strftime("%H:%M:%S")
         self._append(f"[{ts}]  ... {text}", QColor(120, 120, 120))
+        self._has_partial = True
 
     @pyqtSlot(str)
     def add_status(self, message: str) -> None:
@@ -49,6 +54,21 @@ class LogPanel(QWidget):
 
     def clear(self) -> None:
         self._text.clear()
+        self._has_partial = False
+
+    def _remove_partial(self) -> None:
+        """Remove the last partial line so it can be replaced."""
+        if not self._has_partial:
+            return
+        self._has_partial = False
+        doc = self._text.document()
+        if doc.blockCount() < 2:
+            self._text.clear()
+            return
+        cursor = QTextCursor(doc.lastBlock())
+        cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        cursor.removeSelectedText()
+        cursor.deletePreviousChar()
 
     def _append(self, text: str, color: QColor | None) -> None:
         cursor = self._text.textCursor()
