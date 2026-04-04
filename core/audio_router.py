@@ -238,18 +238,20 @@ class AudioRouter:
                 logger.exception("Failed to open output stream (device=%s)", dev_id)
 
     def write_output(self, pcm_data: bytes) -> None:
-        audio_array = np.frombuffer(pcm_data, dtype=np.int16)
-        for stream in self._output_streams:
-            try:
-                stream.write(audio_array)
-            except Exception:
-                logger.debug("Output stream write error", exc_info=True)
+        # Notify listeners FIRST so WebRTC buffers receive data before the
+        # (potentially blocking) device write throttles the TTS thread.
         with self._output_listeners_lock:
             for listener in self._output_listeners:
                 try:
                     listener(pcm_data)
                 except Exception:
                     logger.debug("Output listener error", exc_info=True)
+        audio_array = np.frombuffer(pcm_data, dtype=np.int16)
+        for stream in self._output_streams:
+            try:
+                stream.write(audio_array)
+            except Exception:
+                logger.debug("Output stream write error", exc_info=True)
 
     def add_output_listener(self, callback: Callable[[bytes], None]) -> None:
         with self._output_listeners_lock:
