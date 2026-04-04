@@ -564,26 +564,34 @@ class WebRTCStreamer(QObject):
             return
         self._set_state("stopping")
         self._emit_log("Stopping stream…", "info")
-        self._stop_audio_capture()
-        if self._backend == "ffmpeg":
-            self._stop_ffmpeg()
-        elif self._backend == "aiortc":
-            self._stop_aiortc()
-        self._backend = None
-        self._set_state("idle")
-        self._emit_log("Stream stopped", "info")
-
-    def shutdown(self) -> None:
-        """Full teardown for application exit — safe to call from closeEvent."""
-        self._closing = True
-        if self._state != "idle":
+        try:
             self._stop_audio_capture()
             if self._backend == "ffmpeg":
                 self._stop_ffmpeg()
             elif self._backend == "aiortc":
                 self._stop_aiortc()
-        self._cleanup_all()
-        self._state = "idle"
+        except Exception:
+            logger.exception("Error during stream stop")
+        finally:
+            self._backend = None
+            self._set_state("idle")
+            self._emit_log("Stream stopped", "info")
+
+    def shutdown(self) -> None:
+        """Full teardown for application exit — safe to call from closeEvent."""
+        self._closing = True
+        try:
+            if self._state != "idle":
+                self._stop_audio_capture()
+                if self._backend == "ffmpeg":
+                    self._stop_ffmpeg()
+                elif self._backend == "aiortc":
+                    self._stop_aiortc()
+            self._cleanup_all()
+        except Exception:
+            logger.exception("Error during stream shutdown")
+        finally:
+            self._state = "idle"
 
     # ======================================================================
     # FFmpeg backend
@@ -662,45 +670,77 @@ class WebRTCStreamer(QObject):
         self._start_capture_for_pipe(audio_source, device_id, capture_rate, gain)
 
     def _stop_ffmpeg(self) -> None:
-        if self._write_queue:
-            self._write_queue.put(None)
+        # Close stdin FIRST so any blocked stdin.write() in the writer
+        # thread raises immediately, unblocking it.
         if self._process and self._process.stdin:
             try:
                 self._process.stdin.close()
             except Exception:
                 pass
+
+        # Now signal the writer thread to exit (non-blocking so we never
+        # deadlock if the queue is still full).
+        if self._write_queue:
+            try:
+                self._write_queue.put_nowait(None)
+            except queue.Full:
+                pass
+
+        # Wait for FFmpeg to exit; force-kill on timeout.
         if self._process:
             try:
-                self._process.wait(timeout=4)
+                self._process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                self._process.kill()
-                logger.debug("FFmpeg killed after timeout")
+                try:
+                    self._process.kill()
+                except Exception:
+                    pass
+                try:
+                    self._process.wait(timeout=2)
+                except Exception:
+                    pass
+            except Exception:
+                pass
             self._process = None
-        if self._writer_thread and self._writer_thread.is_alive():
-            self._writer_thread.join(timeout=2)
-        if self._stderr_thread and self._stderr_thread.is_alive():
-            self._stderr_thread.join(timeout=2)
+
+        for t in (self._writer_thread, self._stderr_thread):
+            if t is not None and t.is_alive():
+                t.join(timeout=3)
         self._write_queue = None
         self._writer_thread = None
         self._stderr_thread = None
+
         if self._whip_proxy:
-            self._whip_proxy.delete_resource()
-            self._whip_proxy.stop()
+            try:
+                self._whip_proxy.delete_resource()
+            except Exception:
+                pass
+            try:
+                self._whip_proxy.stop()
+            except Exception:
+                pass
             self._whip_proxy = None
 
     def _ffmpeg_writer(self) -> None:
         """Drain the write queue into FFmpeg's stdin (dedicated thread)."""
-        while True:
-            data = self._write_queue.get()
-            if data is None:
-                break
-            if self._process is None or self._process.poll() is not None:
-                break
-            try:
-                self._process.stdin.write(data)
-                self._process.stdin.flush()
-            except (BrokenPipeError, OSError):
-                break
+        try:
+            while True:
+                wq = self._write_queue
+                if wq is None:
+                    break
+                data = wq.get()
+                if data is None:
+                    break
+                proc = self._process
+                if proc is None or proc.poll() is not None:
+                    break
+                try:
+                    proc.stdin.write(data)
+                    proc.stdin.flush()
+                except Exception:
+                    break
+        except Exception:
+            pass
 
     def _ffmpeg_stderr_reader(self) -> None:
         """Parse FFmpeg stderr and forward relevant lines to the UI log."""
@@ -760,16 +800,17 @@ class WebRTCStreamer(QObject):
         block = 960 if capture_rate == 48000 else 1024
 
         def _cb(indata, frames, time_info, status):
-            if status:
-                logger.debug("FFmpeg capture status: %s", status)
-            if self._write_queue is None:
-                return
-            amplified = indata[:, 0] * gain * 32767
-            pcm = np.clip(amplified, -32768, 32767).astype(np.int16)
-            stereo = np.repeat(pcm, 2)
             try:
-                self._write_queue.put_nowait(stereo.tobytes())
-            except queue.Full:
+                if status:
+                    logger.debug("FFmpeg capture status: %s", status)
+                wq = self._write_queue
+                if wq is None:
+                    return
+                amplified = indata[:, 0] * gain * 32767
+                pcm = np.clip(amplified, -32768, 32767).astype(np.int16)
+                stereo = np.repeat(pcm, 2)
+                wq.put_nowait(stereo.tobytes())
+            except Exception:
                 pass
 
         try:
@@ -791,13 +832,14 @@ class WebRTCStreamer(QObject):
 
     def _start_pipe_translated(self) -> None:
         def _on_output(pcm_data: bytes) -> None:
-            if self._write_queue is None:
-                return
-            mono = np.frombuffer(pcm_data, dtype=np.int16)
-            stereo = np.repeat(mono, 2)
             try:
-                self._write_queue.put_nowait(stereo.tobytes())
-            except queue.Full:
+                wq = self._write_queue
+                if wq is None:
+                    return
+                mono = np.frombuffer(pcm_data, dtype=np.int16)
+                stereo = np.repeat(mono, 2)
+                wq.put_nowait(stereo.tobytes())
+            except Exception:
                 pass
 
         self._output_listener_cb = _on_output
@@ -943,13 +985,17 @@ class WebRTCStreamer(QObject):
         block = AudioBufferTrack.FRAME_SIZE
 
         def _cb(indata, frames, time_info, status):
-            if status:
-                logger.debug("aiortc capture: %s", status)
-            if self._track is None:
-                return
-            amplified = indata[:, 0] * gain * 32767
-            pcm = np.clip(amplified, -32768, 32767).astype(np.int16)
-            self._track.push_audio(pcm, source_rate=rate)
+            try:
+                if status:
+                    logger.debug("aiortc capture: %s", status)
+                track = self._track
+                if track is None:
+                    return
+                amplified = indata[:, 0] * gain * 32767
+                pcm = np.clip(amplified, -32768, 32767).astype(np.int16)
+                track.push_audio(pcm, source_rate=rate)
+            except Exception:
+                pass
 
         try:
             self._capture_stream = sd.InputStream(
@@ -963,10 +1009,14 @@ class WebRTCStreamer(QObject):
 
     def _start_aiortc_translated(self, sample_rate):
         def _on_output(pcm_data: bytes) -> None:
-            if self._track is None:
-                return
-            pcm = np.frombuffer(pcm_data, dtype=np.int16)
-            self._track.push_audio(pcm, source_rate=sample_rate)
+            try:
+                track = self._track
+                if track is None:
+                    return
+                pcm = np.frombuffer(pcm_data, dtype=np.int16)
+                track.push_audio(pcm, source_rate=sample_rate)
+            except Exception:
+                pass
 
         self._output_listener_cb = _on_output
         self._audio_router.add_output_listener(_on_output)
@@ -990,36 +1040,57 @@ class WebRTCStreamer(QObject):
 
     def _cleanup_all(self) -> None:
         """Tear down any remnants from a prior run."""
-        self._stop_audio_capture()
+        try:
+            self._stop_audio_capture()
+        except Exception:
+            pass
+
         # FFmpeg
-        if self._write_queue:
-            self._write_queue.put(None)
         if self._process:
             if self._process.stdin:
                 try:
                     self._process.stdin.close()
                 except Exception:
                     pass
+            if self._write_queue:
+                try:
+                    self._write_queue.put_nowait(None)
+                except queue.Full:
+                    pass
             if self._process.poll() is None:
                 try:
                     self._process.wait(timeout=3)
                 except subprocess.TimeoutExpired:
-                    self._process.kill()
+                    try:
+                        self._process.kill()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
         self._process = None
         self._write_queue = None
-        if self._writer_thread and self._writer_thread.is_alive():
-            self._writer_thread.join(timeout=2)
+        for t in (self._writer_thread, self._stderr_thread):
+            if t is not None and t.is_alive():
+                t.join(timeout=2)
         self._writer_thread = None
-        if self._stderr_thread and self._stderr_thread.is_alive():
-            self._stderr_thread.join(timeout=2)
         self._stderr_thread = None
         if self._whip_proxy:
-            self._whip_proxy.delete_resource()
-            self._whip_proxy.stop()
+            try:
+                self._whip_proxy.delete_resource()
+            except Exception:
+                pass
+            try:
+                self._whip_proxy.stop()
+            except Exception:
+                pass
             self._whip_proxy = None
+
         # aiortc
         if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except Exception:
+                pass
         if self._aio_thread and self._aio_thread.is_alive():
             self._aio_thread.join(timeout=2)
         self._loop = None
