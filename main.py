@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
 import sys
@@ -15,6 +16,8 @@ from core.audio_router import AudioRouter
 from core.config_manager import ConfigManager
 from core.translation_pipeline import TranslationPipeline
 from gui.main_window import MainWindow
+
+_APP_ID = "BCBTranslate.BCBTranslate"
 
 
 def _get_app_dir() -> Path:
@@ -42,6 +45,9 @@ def _setup_logging(level: str = "INFO") -> None:
 
 
 def main() -> None:
+    if sys.platform == "win32":
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(_APP_ID)
+
     # Ensure .env is loaded from the application directory (matters for installed builds)
     app_dir = _get_app_dir()
     env_file = app_dir / ".env"
