@@ -88,6 +88,14 @@ python -m PyInstaller ^
     --hidden-import sounddevice ^
     --hidden-import pynput.keyboard._win32 ^
     --hidden-import pynput._util.win32 ^
+    --hidden-import aiortc ^
+    --collect-submodules aiortc ^
+    --hidden-import aioice ^
+    --hidden-import pylibsrtp ^
+    --collect-binaries pylibsrtp ^
+    --hidden-import av ^
+    --collect-submodules av ^
+    --collect-binaries av ^
     --exclude-module tkinter ^
     --exclude-module matplotlib ^
     --exclude-module scipy ^
