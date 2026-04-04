@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 from core.audio_router import AudioRouter
 from core.config_manager import ConfigManager
 from core.models import DeviceDirection
-from core.webrtc_streamer import HAS_AIORTC, HAS_ANY_BACKEND, HAS_FFMPEG_WHIP, WebRTCStreamer
+from core.webrtc_streamer import HAS_ANY_BACKEND, HAS_FFMPEG_WHIP, WebRTCStreamer
 
 
 class _StreamLog(QWidget):
@@ -176,10 +176,8 @@ class WebRTCPanel(QWidget):
         lbl4.setFixedWidth(72)
         backend_row.addWidget(lbl4)
         self._backend_combo = QComboBox()
-        if HAS_FFMPEG_WHIP:
-            self._backend_combo.addItem("FFmpeg (low-latency)", "ffmpeg")
-        if HAS_AIORTC:
-            self._backend_combo.addItem("aiortc (Python WebRTC)", "aiortc")
+        self._backend_combo.addItem("FFmpeg (low-latency)", "ffmpeg")
+        self._backend_combo.addItem("aiortc (Python WebRTC)", "aiortc")
         self._backend_combo.currentIndexChanged.connect(self._on_backend_changed)
         backend_row.addWidget(self._backend_combo, 1)
         cl.addLayout(backend_row)
