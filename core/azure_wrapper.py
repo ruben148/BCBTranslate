@@ -396,11 +396,24 @@ class AzureTranslationService(QObject):
     # -- voice listing -----------------------------------------------------
 
     def list_voices(self, locale: str = "") -> list[speechsdk.VoiceInfo]:
-        """Retrieve available TTS voices from Azure."""
+        """Retrieve available TTS voices from Azure.
+
+        Uses a short-lived synthesizer with a pull output stream so we do not
+        open PortAudio output devices (unlike ``build_synthesizer()``). This
+        keeps voice listing working from Settings before translation is started.
+        """
         try:
-            if self._synthesizer is None:
-                self.build_synthesizer()
-            result = self._synthesizer.get_voices_async(locale).get()
+            speech_config = speechsdk.SpeechConfig(
+                subscription=self._speech_key,
+                region=self._speech_region,
+            )
+            synth = speechsdk.SpeechSynthesizer(
+                speech_config=speech_config,
+                audio_config=speechsdk.audio.AudioOutputConfig(
+                    stream=speechsdk.audio.PullAudioOutputStream()
+                ),
+            )
+            result = synth.get_voices_async(locale).get()
             if result.reason == speechsdk.ResultReason.VoicesListRetrieved:
                 return list(result.voices)
             logger.warning("Failed to list voices: %s", result.reason)

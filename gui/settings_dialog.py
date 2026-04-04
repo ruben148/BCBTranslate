@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.audio_router import AudioRouter
+from core.azure_wrapper import AzureTranslationService
 from core.config_manager import ConfigManager
 from gui.widgets.voice_browser import VoiceBrowser
 from version import APP_VERSION, GITHUB_REPO
@@ -91,6 +92,7 @@ class SettingsDialog(QDialog):
         self._cfg = config_manager
         self._audio_router = audio_router
         self._pipeline = pipeline
+        self._ephemeral_voice_azure: AzureTranslationService | None = None
 
         self.setWindowTitle("Settings — BCBTranslate")
         self.setMinimumSize(560, 520)
@@ -118,6 +120,17 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def done(self, result: int) -> None:
+        if self._ephemeral_voice_azure is not None:
+            try:
+                self._ephemeral_voice_azure.shutdown()
+            except Exception:
+                logger.exception(
+                    "Failed to shut down ephemeral Azure client for voice browser"
+                )
+            self._ephemeral_voice_azure = None
+        super().done(result)
 
     # -- Azure tab ---------------------------------------------------------
 
@@ -248,8 +261,21 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(w)
 
         self._voice_browser = VoiceBrowser()
-        if self._pipeline and self._pipeline._azure:
-            self._voice_browser.set_azure_service(self._pipeline._azure)
+        azure: AzureTranslationService | None = self._pipeline._azure
+        if azure is None and self._cfg.has_azure_credentials():
+            key = self._cfg.azure_speech_key()
+            region = self._cfg.azure_speech_region()
+            if key and region:
+                self._ephemeral_voice_azure = AzureTranslationService(
+                    key,
+                    region,
+                    self._cfg.config,
+                    self._audio_router,
+                    parent=self,
+                )
+                azure = self._ephemeral_voice_azure
+        if azure is not None:
+            self._voice_browser.set_azure_service(azure)
         layout.addWidget(self._voice_browser)
 
         form = QFormLayout()
@@ -510,8 +536,6 @@ class SettingsDialog(QDialog):
             return
 
         try:
-            from core.azure_wrapper import AzureTranslationService
-
             svc = AzureTranslationService(
                 key, region, self._cfg.config, self._audio_router
             )

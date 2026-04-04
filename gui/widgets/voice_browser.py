@@ -74,6 +74,10 @@ class VoiceBrowser(QWidget):
 
     def _load_voices(self) -> None:
         if not self._azure:
+            self._info_label.setText(
+                "Azure credentials are not configured. Set the key and region "
+                "in your environment (see the Azure tab), then reopen Settings."
+            )
             return
         self._load_btn.setText("Loading...")
         self._load_btn.setEnabled(False)
@@ -81,8 +85,16 @@ class VoiceBrowser(QWidget):
         try:
             self._voices = self._azure.list_voices()
             self._populate_combo(self._voices)
+            if not self._voices:
+                self._info_label.setText(
+                    "No voices were returned. Check your API key, region, and "
+                    "network connection."
+                )
         except Exception:
             logger.exception("Failed to load voices")
+            self._info_label.setText(
+                "Failed to load voices. See the log for details."
+            )
         finally:
             self._load_btn.setText("Load Voices")
             self._load_btn.setEnabled(True)
