@@ -1,5 +1,5 @@
 APP_NAME = "BCBTranslate"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 APP_PUBLISHER = "BCBTranslate"
 APP_URL = ""
 
