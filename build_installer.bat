@@ -7,7 +7,7 @@ echo   BCBTranslate - Build Installer
 echo ============================================
 echo.
 
-:: ── Step 1: Check prerequisites ─────────────────────────────────────
+REM --- Step 1: Check prerequisites ---
 echo [1/4] Checking prerequisites...
 
 where python >nul 2>&1
@@ -17,7 +17,7 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-:: Check if PyInstaller is importable (works even when Scripts is not on PATH)
+REM Check if PyInstaller is importable
 python -c "import PyInstaller" >nul 2>&1
 if %errorlevel% neq 0 (
     echo    PyInstaller not found. Installing...
@@ -31,7 +31,7 @@ if %errorlevel% neq 0 (
 )
 echo    Python + PyInstaller OK
 
-:: Check for Inno Setup
+REM Check for Inno Setup
 set "ISCC="
 if exist "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" (
     set "ISCC=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
@@ -49,9 +49,17 @@ if "%ISCC%"=="" (
     echo    Inno Setup OK
 )
 
+REM Read version from version.py (single source of truth)
+for /f %%a in ('python -c "from version import APP_VERSION; print(APP_VERSION)"') do set "VERSION=%%a"
+if "%VERSION%"=="" (
+    echo ERROR: Could not read APP_VERSION from version.py
+    pause
+    exit /b 1
+)
+echo    Version: %VERSION%
 echo.
 
-:: ── Step 2: Clean previous build ────────────────────────────────────
+REM --- Step 2: Clean previous build ---
 echo [2/4] Cleaning previous build...
 if exist "dist" rmdir /s /q "dist"
 if exist "build" rmdir /s /q "build"
@@ -59,7 +67,7 @@ if exist "installer_output" rmdir /s /q "installer_output"
 echo    OK
 echo.
 
-:: ── Step 3: Build with PyInstaller ──────────────────────────────────
+REM --- Step 3: Build with PyInstaller ---
 echo [3/4] Building application with PyInstaller...
 echo          (this may take a minute or two)
 echo.
@@ -95,7 +103,7 @@ echo.
 echo    PyInstaller build complete: dist\BCBTranslate\
 echo.
 
-:: ── Step 4: Build installer with Inno Setup ─────────────────────────
+REM --- Step 4: Build installer with Inno Setup ---
 if "%ISCC%"=="" (
     echo [4/4] SKIPPED - Inno Setup not installed.
     echo.
@@ -108,7 +116,7 @@ if "%ISCC%"=="" (
 )
 
 echo [4/4] Building installer with Inno Setup...
-"%ISCC%" installer.iss
+"%ISCC%" /DMyAppVersion=%VERSION% installer.iss
 if %errorlevel% neq 0 (
     echo.
     echo ERROR: Inno Setup build failed.
@@ -121,7 +129,7 @@ echo ============================================
 echo   BUILD COMPLETE
 echo ============================================
 echo.
-echo   Installer:  installer_output\BCBTranslate_Setup_1.0.0.exe
+echo   Installer:  installer_output\BCBTranslate_Setup_%VERSION%.exe
 echo.
 echo   Give this single .exe to anyone. It will:
 echo     - Install the application

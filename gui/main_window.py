@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
@@ -14,6 +15,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSlider,
     QSpinBox,
     QStatusBar,
@@ -45,6 +47,13 @@ def _resource_dir() -> Path:
     return Path(__file__).parent / "resources" / "styles"
 
 
+def _icon_path() -> Path:
+    """Resolve the app icon for both dev and frozen (PyInstaller) mode."""
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "gui" / "resources" / "icons" / "app.png"
+    return Path(__file__).parent / "resources" / "icons" / "app.png"
+
+
 STYLE_DIR = _resource_dir()
 
 
@@ -61,8 +70,11 @@ class MainWindow(QMainWindow):
         self._pipeline = pipeline
 
         self.setWindowTitle("BCBTranslate")
-        self.setMinimumSize(680, 720)
-        self.resize(720, 800)
+        icon = _icon_path()
+        if icon.exists():
+            self.setWindowIcon(QIcon(str(icon)))
+        self.setMinimumSize(680, 640)
+        self.resize(740, 920)
 
         self._audio_router.gain = self._cfg.config.input_gain
 
@@ -108,8 +120,22 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setSpacing(10)
+        root.setSpacing(8)
         root.setContentsMargins(14, 14, 14, 14)
+
+        # ── Scrollable control panels ─────────────────────────────────────
+        # Wrapping Audio → Voice Tuning in a scroll area lets the window
+        # shrink on smaller displays without clipping any controls.
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        scroll_container = QWidget()
+        scroll_layout = QVBoxLayout(scroll_container)
+        scroll_layout.setSpacing(8)
+        scroll_layout.setContentsMargins(0, 0, 4, 0)  # small right margin for scrollbar
 
         # ── Audio section ────────────────────────────────────────────────
         audio_group = QGroupBox("Audio")
@@ -167,7 +193,7 @@ class MainWindow(QMainWindow):
         sec_row.addWidget(self._secondary_selector, 1)
         audio_layout.addLayout(sec_row)
 
-        root.addWidget(audio_group)
+        scroll_layout.addWidget(audio_group)
 
         # ── Segmentation section ─────────────────────────────────────────
         seg_group = QGroupBox("Segmentation")
@@ -227,7 +253,7 @@ class MainWindow(QMainWindow):
         thresh_row.addWidget(self._auto_seg_max_spin)
         seg_layout.addLayout(thresh_row)
 
-        root.addWidget(seg_group)
+        scroll_layout.addWidget(seg_group)
 
         # ── Translation section ──────────────────────────────────────────
         trans_group = QGroupBox("Translation")
@@ -252,7 +278,7 @@ class MainWindow(QMainWindow):
         self._voice_label.setStyleSheet("font-weight: bold;")
         trans_layout.addWidget(self._voice_label)
 
-        root.addWidget(trans_group)
+        scroll_layout.addWidget(trans_group)
 
         # ── Voice Tuning section ─────────────────────────────────────────
         tuning_group = QGroupBox("Voice Tuning")
@@ -286,7 +312,11 @@ class MainWindow(QMainWindow):
         pitch_row.addWidget(self._pitch_label)
         tuning_layout.addLayout(pitch_row)
 
-        root.addWidget(tuning_group)
+        scroll_layout.addWidget(tuning_group)
+        scroll_layout.addStretch()  # push groups to top within the scroll area
+
+        scroll_area.setWidget(scroll_container)
+        root.addWidget(scroll_area, 2)  # takes 2/3 of vertical space
 
         # ── Status section ───────────────────────────────────────────────
         status_group = QGroupBox("Status")

@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from core.audio_router import AudioRouter
@@ -22,6 +23,13 @@ def _get_app_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).parent
+
+
+def _get_icon_path() -> Path:
+    """Resolve app icon for both dev and frozen (PyInstaller) mode."""
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "gui" / "resources" / "icons" / "app.png"
+    return Path(__file__).parent / "gui" / "resources" / "icons" / "app.png"
 
 
 def _setup_logging(level: str = "INFO") -> None:
@@ -42,6 +50,9 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("BCBTranslate")
     app.setOrganizationName("BCBTranslate")
+    icon_path = _get_icon_path()
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     config_manager = ConfigManager()
     _setup_logging(config_manager.config.log_level)

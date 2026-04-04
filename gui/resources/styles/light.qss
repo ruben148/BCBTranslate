@@ -198,6 +198,16 @@ QSpinBox, QDoubleSpinBox {
     color: #4c4f69;
 }
 
+/* Scroll area — transparent so main window background shows through */
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+QScrollArea > QWidget > QWidget {
+    background: transparent;
+}
+
 QScrollBar:vertical {
     background: #eff1f5;
     width: 10px;

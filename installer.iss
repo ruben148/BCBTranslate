@@ -9,7 +9,9 @@
 ;   - Preserves .env on upgrade (never overwrites credentials)
 
 #define MyAppName      "BCBTranslate"
-#define MyAppVersion   "1.0.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "0.0.0"
+#endif
 #define MyAppPublisher "BCBTranslate"
 #define MyAppExeName   "BCBTranslate.exe"
 
@@ -42,9 +44,8 @@ MinVersion=10.0
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 
-; Uncomment the line below if you have an app.ico icon file:
-; SetupIconFile=gui\resources\icons\app.ico
-; UninstallDisplayIcon={app}\BCBTranslate.exe
+SetupIconFile=gui\resources\icons\app.ico
+UninstallDisplayIcon={app}\BCBTranslate.exe
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
