@@ -486,6 +486,7 @@ class WebRTCStreamer(QObject):
         self._write_queue: queue.Queue[bytes | None] | None = None
         self._writer_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
+        self._translated_feeder_thread: threading.Thread | None = None
         self._whip_proxy: _WHIPProxy | None = None
 
         # aiortc backend
@@ -707,8 +708,11 @@ class WebRTCStreamer(QObject):
             if t is not None and t.is_alive():
                 t.join(timeout=3)
         self._write_queue = None
+        if self._translated_feeder_thread is not None and self._translated_feeder_thread.is_alive():
+            self._translated_feeder_thread.join(timeout=3)
         self._writer_thread = None
         self._stderr_thread = None
+        self._translated_feeder_thread = None
 
         if self._whip_proxy:
             try:
@@ -790,7 +794,7 @@ class WebRTCStreamer(QObject):
         if audio_source == "original":
             self._start_pipe_original(device_id, capture_rate, gain)
         else:
-            self._start_pipe_translated()
+            self._start_pipe_translated(capture_rate)
 
     def _start_pipe_original(
         self, device_id: int | None, capture_rate: int, gain: float
@@ -830,20 +834,65 @@ class WebRTCStreamer(QObject):
         except Exception as exc:
             self._emit_log(f"Failed to start audio capture: {exc}", "error")
 
-    def _start_pipe_translated(self) -> None:
+    def _start_pipe_translated(self, capture_rate: int) -> None:
+        audio_buf: collections.deque[np.ndarray] = collections.deque()
+        buf_lock = threading.Lock()
+
         def _on_output(pcm_data: bytes) -> None:
             try:
-                wq = self._write_queue
-                if wq is None:
-                    return
                 mono = np.frombuffer(pcm_data, dtype=np.int16)
                 stereo = np.repeat(mono, 2)
-                wq.put_nowait(stereo.tobytes())
+                with buf_lock:
+                    audio_buf.append(stereo)
             except Exception:
                 pass
 
         self._output_listener_cb = _on_output
         self._audio_router.add_output_listener(_on_output)
+
+        frame_duration = 0.02
+        frame_samples = int(capture_rate * frame_duration) * 2  # stereo
+        silence = bytes(frame_samples * 2)  # int16 zeros
+        max_buf_samples = capture_rate * 2 * 2  # 2s stereo buffer cap
+
+        def _feeder() -> None:
+            residual = np.array([], dtype=np.int16)
+            next_time = time.monotonic()
+            while True:
+                wq = self._write_queue
+                if wq is None:
+                    break
+
+                with buf_lock:
+                    if audio_buf:
+                        chunks = ([residual] if residual.size else []) + list(audio_buf)
+                        audio_buf.clear()
+                        residual = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
+                        if residual.size > max_buf_samples:
+                            residual = residual[-max_buf_samples:]
+
+                if residual.size >= frame_samples:
+                    frame = residual[:frame_samples].tobytes()
+                    residual = residual[frame_samples:]
+                else:
+                    frame = silence
+
+                try:
+                    wq.put(frame, timeout=0.1)
+                except Exception:
+                    pass
+
+                next_time += frame_duration
+                delay = next_time - time.monotonic()
+                if delay > 0:
+                    time.sleep(delay)
+                elif delay < -0.5:
+                    next_time = time.monotonic()
+
+        self._translated_feeder_thread = threading.Thread(
+            target=_feeder, daemon=True, name="ffmpeg-translated-feeder",
+        )
+        self._translated_feeder_thread.start()
         self._emit_log("Listening for translated TTS audio output", "success")
 
     # ======================================================================
@@ -1069,11 +1118,12 @@ class WebRTCStreamer(QObject):
                     pass
         self._process = None
         self._write_queue = None
-        for t in (self._writer_thread, self._stderr_thread):
+        for t in (self._writer_thread, self._stderr_thread, self._translated_feeder_thread):
             if t is not None and t.is_alive():
                 t.join(timeout=2)
         self._writer_thread = None
         self._stderr_thread = None
+        self._translated_feeder_thread = None
         if self._whip_proxy:
             try:
                 self._whip_proxy.delete_resource()
