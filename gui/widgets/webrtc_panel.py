@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 from core.audio_router import AudioRouter
 from core.config_manager import ConfigManager
 from core.models import DeviceDirection
-from core.webrtc_streamer import HAS_AIORTC, WebRTCStreamer
+from core.webrtc_streamer import HAS_ANY_BACKEND, HAS_FFMPEG_WHIP, WebRTCStreamer
 
 
 class _StreamLog(QWidget):
@@ -190,16 +190,20 @@ class WebRTCPanel(QWidget):
 
         root.addWidget(self._content)
 
-        if not HAS_AIORTC:
+        if not HAS_ANY_BACKEND:
             self._stream_btn.setEnabled(False)
             self._stream_btn.setToolTip(
-                "Install the 'aiortc' package to enable WebRTC streaming:\n"
-                "pip install aiortc"
+                "No WebRTC backend available.\n"
+                "Install FFmpeg 6.1+ (recommended) or: pip install aiortc"
             )
             self._log.add_message(
-                "WebRTC streaming requires 'aiortc'. "
-                "Install with: pip install aiortc",
+                "No WebRTC backend found. Install FFmpeg 6.1+ with WHIP "
+                "support (recommended) or: pip install aiortc",
                 "warning",
+            )
+        elif HAS_FFMPEG_WHIP:
+            self._log.add_message(
+                "FFmpeg backend ready (low-latency)", "success",
             )
 
     # -- signals -----------------------------------------------------------

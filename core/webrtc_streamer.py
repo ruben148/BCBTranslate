@@ -92,6 +92,14 @@ def _ffmpeg_supports_whip(ffmpeg: str) -> bool:
     return False
 
 
+HAS_FFMPEG_WHIP = False
+_ffmpeg_path = _find_ffmpeg()
+if _ffmpeg_path:
+    HAS_FFMPEG_WHIP = _ffmpeg_supports_whip(_ffmpeg_path)
+
+HAS_ANY_BACKEND = HAS_FFMPEG_WHIP or HAS_AIORTC
+
+
 # ---------------------------------------------------------------------------
 # aiortc helpers (SDP hostname resolution, STUN)
 # ---------------------------------------------------------------------------
