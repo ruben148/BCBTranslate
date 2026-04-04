@@ -529,7 +529,8 @@ BCBTranslate/
 │   ├── audio_router.py            # Device enumeration, routing, dual output
 │   ├── monitor.py                 # Lag tracking, metrics, health checks
 │   ├── models.py                  # Dataclasses: AudioDevice, Utterance, Metrics, AppConfig
-│   └── updater.py                 # OTA update checker, downloader, installer launcher
+│   ├── updater.py                 # OTA update checker, downloader, installer launcher
+│   └── webrtc_streamer.py         # WHIP audio streamer (FFmpeg primary, aiortc fallback)
 │
 ├── gui/
 │   ├── __init__.py
@@ -541,7 +542,8 @@ BCBTranslate/
 │   │   ├── lag_indicator.py       # Colored dot-based lag display
 │   │   ├── device_selector.py     # Combo box with device refresh
 │   │   ├── log_panel.py           # Scrollable, filterable log view
-│   │   └── voice_browser.py       # Voice selection with preview
+│   │   ├── voice_browser.py       # Voice selection with preview
+│   │   └── webrtc_panel.py        # Collapsible WebRTC streaming panel
 │   ├── resources/
 │   │   ├── icons/                 # App icons, tray icons
 │   │   └── styles/
@@ -765,6 +767,8 @@ File name format: `transcript_2026-04-02_10-00-00.txt`
 | Config format | JSON | — | Human-readable, built-in Python support, no extra dependency |
 | Env management | python-dotenv | latest | Load .env files for API keys |
 | Global hotkeys | pynput | latest | Cross-platform global keyboard listener |
+| WebRTC streaming | FFmpeg (primary) | 6.1+ | Native C performance for Opus encoding + WHIP transport; lowest latency |
+| WebRTC fallback | aiortc | 1.9+ | Pure-Python WebRTC when FFmpeg is unavailable; higher latency |
 | Packaging | PyInstaller | latest | Single-file .exe distribution for non-technical operators |
 
 **`requirements.txt`:**
@@ -777,6 +781,9 @@ numpy>=1.26
 python-dotenv>=1.0
 pynput>=1.7
 comtypes>=1.4
+
+# WebRTC streaming (fallback backend — used only when FFmpeg is not available)
+aiortc>=1.9
 ```
 
 ---
@@ -804,9 +811,16 @@ Main Thread (Qt Event Loop)
   │     └── Reads input audio level at 30 Hz
   │     └── Posts RMS value to GUI via signal
   │
-  └── [Thread] Hotkey Listener
-        └── Listens for global keyboard shortcuts
-        └── Emits signal on hotkey press
+  ├── [Thread] Hotkey Listener
+  │     └── Listens for global keyboard shortcuts
+  │     └── Emits signal on hotkey press
+  │
+  └── [Thread(s)] WebRTC Streamer
+        ├── FFmpeg backend:
+        │     ├── [Thread] FFmpeg Writer — drains audio queue → ffmpeg stdin
+        │     └── [Thread] FFmpeg Stderr Reader — parses logs, detects state
+        └── aiortc backend (fallback):
+              └── [Thread] asyncio event loop — ICE, DTLS, SRTP, Opus encoding
 ```
 
 **Thread Safety Rules:**
@@ -817,7 +831,57 @@ Main Thread (Qt Event Loop)
 
 ---
 
-## 9. Error Scenarios & Recovery
+## 9. WebRTC Audio Streaming
+
+An independent, optional module allows the operator to stream audio to a WebRTC-compatible server using the **WHIP (WebRTC-HTTP Ingestion Protocol)**. This is useful for broadcasting the original or translated audio to platforms like OBS, Janus, MediaMTX, etc.
+
+### Architecture
+
+The module is self-contained and does not interfere with the core translation pipeline:
+
+```
+WebRTCPanel (GUI)                 WebRTCStreamer (core)
+  ├── WHIP URL input       ──►     ├── Backend selection
+  ├── Bearer token input             │   ├── FFmpeg (preferred)
+  ├── Audio source combo             │   └── aiortc (fallback)
+  ├── Start / Stop button           ├── Audio capture
+  ├── Status label                  │   ├── "original" → sounddevice 48 kHz
+  └── Dedicated log panel           │   └── "translated" → AudioRouter listener
+                                    └── WHIP SDP negotiation
+```
+
+### Backends
+
+| Backend | Latency | Requirements | Notes |
+|---------|---------|-------------|-------|
+| **FFmpeg** (primary) | ~300-500ms | FFmpeg 6.1+ with WHIP muxer on PATH | Native C Opus encoding, ICE, DTLS, SRTP. Comparable to BUTT. |
+| **aiortc** (fallback) | ~800-1000ms | `pip install aiortc` | Pure Python. Higher latency due to GIL and asyncio overhead. |
+
+Backend selection is automatic: if FFmpeg is found on PATH and supports the WHIP muxer (`-f whip`), it is used. Otherwise, `aiortc` is attempted. If neither is available, the stream button is disabled with a tooltip explaining what to install.
+
+### Audio Sources
+
+- **Original audio**: Captured directly from the selected input device at 48 kHz via `sounddevice`. Independent of the translation pipeline.
+- **Translated audio**: Taps into the TTS output via `AudioRouter.add_output_listener()`. Audio arrives at the pipeline's native sample rate (typically 16 kHz) and is forwarded as-is to the encoder.
+
+### Configuration
+
+Four fields are persisted in `AppConfig`:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `webrtc_whip_url` | `str` | `""` | WHIP endpoint URL |
+| `webrtc_bearer_token` | `str` | `""` | Optional bearer token for authentication |
+| `webrtc_audio_source` | `str` | `"original"` | `"original"` or `"translated"` |
+| `webrtc_panel_expanded` | `bool` | `False` | Whether the collapsible panel is open |
+
+### GUI Integration
+
+The `WebRTCPanel` sits on the main window as a collapsible section between the status bar and the live translation log. It has its own log widget (`_StreamLog`) that shows color-coded connection events, separate from the translation log.
+
+---
+
+## 10. Error Scenarios & Recovery
 
 | Scenario | Detection | Recovery |
 |----------|-----------|----------|
@@ -828,10 +892,14 @@ Main Thread (Qt Event Loop)
 | TTS queue overflow (speaker too fast) | `queue.qsize() > max_tts_queue_size` | Drop oldest, increase rate (if adaptive), warn operator |
 | Azure service degraded (slow responses) | Lag exceeds 10s sustained | Warning in UI; suggest operator slow down or increase TTS rate |
 | Virtual cable not installed | No virtual devices found | Show info dialog explaining how to install VB-CABLE |
+| WebRTC: FFmpeg not found | Backend detection at stream start | Fall back to aiortc; log info message |
+| WebRTC: WHIP endpoint unreachable | HTTP error on SDP offer POST | Show error in stream log; stop stream |
+| WebRTC: ICE connection failure | ICE state → `failed` | Log error; stop stream; user can retry |
+| WebRTC: FFmpeg process crash | Non-zero exit code / broken pipe | Log stderr output; update status to disconnected |
 
 ---
 
-## 10. Future Extensibility
+## 11. Future Extensibility
 
 The architecture is designed to accommodate future enhancements without structural changes:
 
@@ -849,7 +917,7 @@ The architecture is designed to accommodate future enhancements without structur
 
 ---
 
-## 11. Deployment & Distribution
+## 12. Deployment & Distribution
 
 ### Development Setup
 
@@ -873,6 +941,14 @@ The resulting `dist/BCBTranslate/` folder can be zipped and shared. No Python in
 
 Alternatively, create an installer with **Inno Setup** for a proper Windows install experience with Start Menu shortcuts and uninstaller.
 
+### FFmpeg for WebRTC Streaming
+
+The WebRTC streaming module uses FFmpeg as its primary backend. FFmpeg is **not bundled** with the application — it is an optional external dependency:
+
+- If FFmpeg 6.1+ with WHIP muxer support is found on the system PATH, it is used automatically for low-latency streaming.
+- If FFmpeg is not available, the module falls back to the bundled `aiortc` Python library (higher latency).
+- The build scripts bundle `aiortc` and its dependencies (`aioice`, `pylibsrtp`, `av`) via PyInstaller hidden imports. FFmpeg is documented as a recommended install for users who need WebRTC streaming.
+
 ### First-Run Experience
 
 On first launch (no config file exists):
@@ -886,7 +962,7 @@ On first launch (no config file exists):
 
 ---
 
-## 12. Configuration Lifecycle
+## 13. Configuration Lifecycle
 
 ```
 Application Start
@@ -930,7 +1006,7 @@ The config schema includes a `version` field. When the app is updated and the sc
 
 ---
 
-## 13. Testing Strategy
+## 14. Testing Strategy
 
 | Layer | Testing Approach |
 |-------|-----------------|
@@ -943,7 +1019,7 @@ The config schema includes a `version` field. When the app is updated and the sc
 
 ---
 
-## 14. Open Questions & Decisions
+## 15. Open Questions & Decisions
 
 | # | Question | Recommendation | Status |
 |---|----------|---------------|--------|
@@ -955,7 +1031,7 @@ The config schema includes a `version` field. When the app is updated and the sc
 
 ---
 
-## 15. Implementation Phases
+## 16. Implementation Phases
 
 ### Phase 1 — Core Engine (MVP)
 
@@ -992,6 +1068,6 @@ The config schema includes a `version` field. When the app is updated and the sc
 
 ---
 
-## 16. Summary
+## 17. Summary
 
 BCBTranslate transforms two fragile prototype scripts into a robust, configurable, operator-friendly real-time translation application. The layered architecture separates audio routing, translation logic, configuration, and presentation, making each independently testable and replaceable. Full device control — including virtual audio cables for Teams integration — eliminates the need to manipulate Windows audio defaults. Lag monitoring and adaptive rate control keep the translation in sync with fast speakers. Persistent configuration means the operator sets it up once and simply presses Start on subsequent sessions.

@@ -4,4 +4,6 @@ sounddevice>=0.4
 numpy>=1.26
 python-dotenv>=1.0
 pynput>=1.7
+
+# WebRTC streaming (fallback backend — used only when FFmpeg is not available)
 aiortc>=1.9

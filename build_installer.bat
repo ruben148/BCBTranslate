@@ -72,6 +72,10 @@ echo [3/4] Building application with PyInstaller...
 echo          (this may take a minute or two)
 echo.
 
+REM Note: FFmpeg is NOT bundled. It is an optional external dependency for
+REM low-latency WebRTC streaming (WHIP). The app falls back to the bundled
+REM aiortc Python library when FFmpeg is not on PATH.
+
 python -m PyInstaller ^
     --name BCBTranslate ^
     --noconfirm ^
