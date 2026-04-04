@@ -356,6 +356,7 @@ class WebRTCStreamer(QObject):
             "-ar", str(capture_rate),
             "-ac", "1",
             "-i", "pipe:0",
+            "-ac", "2",
             "-c:a", "libopus",
             "-b:a", "128k",
             "-application", "lowdelay",
