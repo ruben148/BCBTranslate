@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+*.spec
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# PyInstaller
+installer_output/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs & transcripts
+*.log
+transcripts/
+
+# Legacy scripts
+translate.py
+translate_midas.py
