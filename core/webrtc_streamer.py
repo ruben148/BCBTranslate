@@ -17,6 +17,8 @@ from __future__ import annotations
 import asyncio
 import collections
 import fractions
+import http.server
+import ipaddress
 import logging
 import queue
 import shutil
@@ -144,6 +146,215 @@ def _resolve_sdp_hostnames(sdp: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# WHIP SDP proxy  (fixes ICE candidates for FFmpeg)
+# ---------------------------------------------------------------------------
+
+def _is_private_ip(addr: str) -> bool:
+    try:
+        return ipaddress.ip_address(addr).is_private
+    except ValueError:
+        return False
+
+
+def _fix_ice_candidates(sdp: str) -> str:
+    """Resolve hostnames and drop private-IP candidates when public ones exist.
+
+    FFmpeg's WHIP muxer picks the first ICE candidate and ignores the rest.
+    Servers behind NAT (e.g. GCP) often advertise both a private VPC IP and a
+    public hostname.  This function resolves hostnames to IPs and strips
+    unreachable private candidates so FFmpeg connects to the right address.
+
+    If *all* candidates are private (LAN deployment), they are kept as-is.
+    """
+    sep = "\r\n" if "\r\n" in sdp else "\n"
+    lines = sdp.split(sep)
+
+    resolved: list[tuple[str, bool]] = []
+    has_public = False
+
+    for line in lines:
+        if not line.startswith("a=candidate:"):
+            resolved.append((line, False))
+            continue
+
+        parts = line.split()
+        if len(parts) <= 4:
+            resolved.append((line, False))
+            continue
+
+        addr = parts[4]
+
+        if not _is_ip_address(addr):
+            try:
+                infos = socket.getaddrinfo(addr, None, socket.AF_INET)
+                if infos:
+                    ip = infos[0][4][0]
+                    logger.info("WHIP proxy: resolved %s → %s", addr, ip)
+                    parts[4] = ip
+                    line = " ".join(parts)
+                    addr = ip
+            except socket.gaierror:
+                logger.warning("WHIP proxy: cannot resolve %s", addr)
+
+        is_priv = _is_ip_address(addr) and _is_private_ip(addr)
+        if not is_priv:
+            has_public = True
+        resolved.append((line, is_priv))
+
+    if not has_public:
+        return sep.join(line for line, _ in resolved)
+
+    result: list[str] = []
+    for line, is_priv in resolved:
+        if is_priv:
+            logger.info("WHIP proxy: dropping private-IP candidate")
+            continue
+        result.append(line)
+    return sep.join(result)
+
+
+class _WHIPProxy:
+    """Localhost HTTP server that proxies WHIP signaling to the real endpoint.
+
+    Intercepts the SDP answer to fix ICE candidates before FFmpeg sees them.
+    Only handles HTTP signaling; media (UDP) flows directly from FFmpeg to the
+    remote server once the correct IP is in the SDP.
+    """
+
+    def __init__(self, target_url: str, bearer_token: str) -> None:
+        self._target_url = target_url
+        self._bearer_token = bearer_token
+        self._server: http.server.HTTPServer | None = None
+        self._thread: threading.Thread | None = None
+        self._resource_url: str = ""
+
+    def start(self) -> int:
+        proxy = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_args: object) -> None:
+                pass
+
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length) if length else b""
+
+                headers = {"Content-Type": "application/sdp"}
+                if proxy._bearer_token:
+                    headers["Authorization"] = f"Bearer {proxy._bearer_token}"
+
+                try:
+                    req = urllib.request.Request(
+                        proxy._target_url, data=body,
+                        headers=headers, method="POST",
+                    )
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        answer_sdp = resp.read().decode("utf-8")
+                        location = resp.headers.get("Location")
+                        status = resp.status
+                except urllib.error.HTTPError as exc:
+                    self.send_response(exc.code)
+                    self.end_headers()
+                    try:
+                        self.wfile.write(exc.read())
+                    except Exception:
+                        pass
+                    return
+                except Exception as exc:
+                    logger.error("WHIP proxy POST failed: %s", exc)
+                    self.send_response(502)
+                    self.end_headers()
+                    self.wfile.write(str(exc).encode())
+                    return
+
+                fixed_sdp = _fix_ice_candidates(answer_sdp)
+
+                if location:
+                    if location.startswith("http"):
+                        proxy._resource_url = location
+                    else:
+                        proxy._resource_url = urljoin(
+                            proxy._target_url, location,
+                        )
+
+                body_bytes = fixed_sdp.encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/sdp")
+                self.send_header("Content-Length", str(len(body_bytes)))
+                if location:
+                    self.send_header("Location", location)
+                self.end_headers()
+                self.wfile.write(body_bytes)
+
+            def do_DELETE(self) -> None:
+                url = proxy._resource_url
+                if not url:
+                    self.send_response(200)
+                    self.end_headers()
+                    return
+                try:
+                    req = urllib.request.Request(url, method="DELETE")
+                    if proxy._bearer_token:
+                        req.add_header(
+                            "Authorization",
+                            f"Bearer {proxy._bearer_token}",
+                        )
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        self.send_response(resp.status)
+                        self.end_headers()
+                except Exception:
+                    self.send_response(200)
+                    self.end_headers()
+
+            def do_PATCH(self) -> None:
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length) if length else b""
+                url = proxy._resource_url
+                if not url:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                try:
+                    ct = self.headers.get(
+                        "Content-Type", "application/trickle-ice-sdpfrag",
+                    )
+                    req = urllib.request.Request(
+                        url, data=body,
+                        headers={"Content-Type": ct}, method="PATCH",
+                    )
+                    if proxy._bearer_token:
+                        req.add_header(
+                            "Authorization",
+                            f"Bearer {proxy._bearer_token}",
+                        )
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        data = resp.read()
+                        self.send_response(resp.status)
+                        self.end_headers()
+                        self.wfile.write(data)
+                except Exception:
+                    self.send_response(502)
+                    self.end_headers()
+
+        self._server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        port = self._server.server_address[1]
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, daemon=True, name="whip-proxy",
+        )
+        self._thread.start()
+        logger.info("WHIP proxy started on 127.0.0.1:%d → %s", port, self._target_url)
+        return port
+
+    def stop(self) -> None:
+        if self._server:
+            self._server.shutdown()
+            self._server = None
+        if self._thread:
+            self._thread.join(timeout=3)
+            self._thread = None
+
+
+# ---------------------------------------------------------------------------
 # AudioBufferTrack  (aiortc fallback only)
 # ---------------------------------------------------------------------------
 
@@ -258,6 +469,7 @@ class WebRTCStreamer(QObject):
         self._write_queue: queue.Queue[bytes | None] | None = None
         self._writer_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
+        self._whip_proxy: _WHIPProxy | None = None
 
         # aiortc backend
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -286,6 +498,7 @@ class WebRTCStreamer(QObject):
         input_device_id: int | None = None,
         sample_rate: int = 16000,
         gain: float = 1.0,
+        preferred_backend: str = "ffmpeg",
     ) -> None:
         if self._state not in ("idle", "error"):
             self._emit_log("Stream is already active", "warning")
@@ -297,15 +510,27 @@ class WebRTCStreamer(QObject):
         self._cleanup_all()
         self._set_state("connecting")
 
-        ffmpeg = _find_ffmpeg()
-        if ffmpeg and _ffmpeg_supports_whip(ffmpeg):
+        if preferred_backend == "ffmpeg":
+            ffmpeg = _find_ffmpeg()
+            if not ffmpeg or not _ffmpeg_supports_whip(ffmpeg):
+                self._set_state("error")
+                self._emit_log(
+                    "FFmpeg not found or missing WHIP muxer support", "error",
+                )
+                return
             self._backend = "ffmpeg"
             self._emit_log("Starting stream (FFmpeg backend)…", "info")
             self._start_ffmpeg(
                 ffmpeg, whip_url.strip(), bearer_token.strip(),
                 audio_source, input_device_id, sample_rate, gain,
             )
-        elif HAS_AIORTC:
+        elif preferred_backend == "aiortc":
+            if not HAS_AIORTC:
+                self._set_state("error")
+                self._emit_log(
+                    "aiortc is not installed (pip install aiortc)", "error",
+                )
+                return
             self._backend = "aiortc"
             self._emit_log("Starting stream (aiortc backend)…", "info")
             self._start_aiortc(
@@ -314,11 +539,7 @@ class WebRTCStreamer(QObject):
             )
         else:
             self._set_state("error")
-            self._emit_log(
-                "No streaming backend found. Install FFmpeg (recommended) "
-                "or the aiortc Python package.",
-                "error",
-            )
+            self._emit_log(f"Unknown backend: {preferred_backend}", "error")
 
     def stop(self) -> None:
         if self._state == "idle":
@@ -350,21 +571,32 @@ class WebRTCStreamer(QObject):
     ) -> None:
         capture_rate = 48000 if audio_source == "original" else sample_rate
 
+        self._whip_proxy = _WHIPProxy(url, token)
+        proxy_port = self._whip_proxy.start()
+        proxy_url = f"http://127.0.0.1:{proxy_port}/"
+        self._emit_log(
+            f"WHIP proxy on :{proxy_port} (fixes ICE candidates)", "info",
+        )
+
         cmd: list[str] = [
             ffmpeg, "-hide_banner", "-loglevel", "info",
+            "-probesize", "32",
+            "-analyzeduration", "0",
+            "-fflags", "+nobuffer",
             "-f", "s16le",
             "-ar", str(capture_rate),
-            "-ac", "1",
-            "-i", "pipe:0",
             "-ac", "2",
+            "-i", "pipe:0",
             "-c:a", "libopus",
             "-b:a", "128k",
             "-application", "lowdelay",
+            "-frame_duration", "20",
+            "-flush_packets", "1",
+            "-max_delay", "0",
             "-f", "whip",
+            "-handshake_timeout", "15000",
+            proxy_url,
         ]
-        if token:
-            cmd += ["-bearer_token", token]
-        cmd.append(url)
 
         try:
             self._process = subprocess.Popen(
@@ -385,7 +617,7 @@ class WebRTCStreamer(QObject):
 
         self._emit_log(f"FFmpeg started (PID {self._process.pid})", "info")
 
-        self._write_queue = queue.Queue(maxsize=250)
+        self._write_queue = queue.Queue(maxsize=10)
         self._writer_thread = threading.Thread(
             target=self._ffmpeg_writer, daemon=True, name="ffmpeg-writer",
         )
@@ -420,6 +652,9 @@ class WebRTCStreamer(QObject):
         self._write_queue = None
         self._writer_thread = None
         self._stderr_thread = None
+        if self._whip_proxy:
+            self._whip_proxy.stop()
+            self._whip_proxy = None
 
     def _ffmpeg_writer(self) -> None:
         """Drain the write queue into FFmpeg's stdin (dedicated thread)."""
@@ -431,6 +666,7 @@ class WebRTCStreamer(QObject):
                 break
             try:
                 self._process.stdin.write(data)
+                self._process.stdin.flush()
             except (BrokenPipeError, OSError):
                 break
 
@@ -492,8 +728,9 @@ class WebRTCStreamer(QObject):
                 return
             amplified = indata[:, 0] * gain * 32767
             pcm = np.clip(amplified, -32768, 32767).astype(np.int16)
+            stereo = np.repeat(pcm, 2)
             try:
-                self._write_queue.put_nowait(pcm.tobytes())
+                self._write_queue.put_nowait(stereo.tobytes())
             except queue.Full:
                 pass
 
@@ -518,8 +755,10 @@ class WebRTCStreamer(QObject):
         def _on_output(pcm_data: bytes) -> None:
             if self._write_queue is None:
                 return
+            mono = np.frombuffer(pcm_data, dtype=np.int16)
+            stereo = np.repeat(mono, 2)
             try:
-                self._write_queue.put_nowait(pcm_data)
+                self._write_queue.put_nowait(stereo.tobytes())
             except queue.Full:
                 pass
 
@@ -721,6 +960,9 @@ class WebRTCStreamer(QObject):
         if self._write_queue:
             self._write_queue.put(None)
         self._write_queue = None
+        if self._whip_proxy:
+            self._whip_proxy.stop()
+            self._whip_proxy = None
         # aiortc
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)

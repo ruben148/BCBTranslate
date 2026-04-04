@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 from core.audio_router import AudioRouter
 from core.config_manager import ConfigManager
 from core.models import DeviceDirection
-from core.webrtc_streamer import HAS_ANY_BACKEND, HAS_FFMPEG_WHIP, WebRTCStreamer
+from core.webrtc_streamer import HAS_AIORTC, HAS_ANY_BACKEND, HAS_FFMPEG_WHIP, WebRTCStreamer
 
 
 class _StreamLog(QWidget):
@@ -170,6 +170,20 @@ class WebRTCPanel(QWidget):
         source_row.addWidget(self._source_combo, 1)
         cl.addLayout(source_row)
 
+        # Backend selection
+        backend_row = QHBoxLayout()
+        lbl4 = QLabel("Backend:")
+        lbl4.setFixedWidth(72)
+        backend_row.addWidget(lbl4)
+        self._backend_combo = QComboBox()
+        if HAS_FFMPEG_WHIP:
+            self._backend_combo.addItem("FFmpeg (low-latency)", "ffmpeg")
+        if HAS_AIORTC:
+            self._backend_combo.addItem("aiortc (Python WebRTC)", "aiortc")
+        self._backend_combo.currentIndexChanged.connect(self._on_backend_changed)
+        backend_row.addWidget(self._backend_combo, 1)
+        cl.addLayout(backend_row)
+
         # Controls row
         ctrl_row = QHBoxLayout()
         self._stream_btn = QPushButton("START STREAM")
@@ -224,6 +238,10 @@ class WebRTCPanel(QWidget):
         if idx >= 0:
             self._source_combo.setCurrentIndex(idx)
 
+        bidx = self._backend_combo.findData(cfg.webrtc_backend)
+        if bidx >= 0:
+            self._backend_combo.setCurrentIndex(bidx)
+
         if cfg.webrtc_panel_expanded:
             self._toggle_btn.setChecked(True)
 
@@ -244,6 +262,11 @@ class WebRTCPanel(QWidget):
         source = self._source_combo.currentData()
         if source:
             self._cfg.set("webrtc_audio_source", source)
+
+    def _on_backend_changed(self, _idx: int) -> None:
+        backend = self._backend_combo.currentData()
+        if backend:
+            self._cfg.set("webrtc_backend", backend)
 
     def _toggle_stream(self) -> None:
         if self._streamer.state in ("streaming", "connecting"):
@@ -270,6 +293,7 @@ class WebRTCPanel(QWidget):
                 input_device_id=device_id,
                 sample_rate=self._cfg.config.sample_rate,
                 gain=self._cfg.config.input_gain,
+                preferred_backend=self._backend_combo.currentData() or "auto",
             )
 
     @pyqtSlot(str)
@@ -292,3 +316,4 @@ class WebRTCPanel(QWidget):
         self._url_input.setEnabled(not is_active)
         self._token_input.setEnabled(not is_active)
         self._source_combo.setEnabled(not is_active)
+        self._backend_combo.setEnabled(not is_active)

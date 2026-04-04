@@ -161,4 +161,5 @@ class AppConfig:
     webrtc_whip_url: str = ""
     webrtc_bearer_token: str = ""
     webrtc_audio_source: str = "original"
+    webrtc_backend: str = "ffmpeg"  # "ffmpeg" or "aiortc"
     webrtc_panel_expanded: bool = False
