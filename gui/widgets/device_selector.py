@@ -3,6 +3,13 @@ from __future__ import annotations
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QPushButton, QWidget
 
+
+class _NoScrollComboBox(QComboBox):
+    """QComboBox that never changes selection via the scroll wheel."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
 from core.audio_router import AudioRouter
 from core.models import AudioDevice, DeviceDirection
 
@@ -28,7 +35,7 @@ class DeviceSelector(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        self._combo = QComboBox()
+        self._combo = _NoScrollComboBox()
         self._combo.setMinimumWidth(300)
         self._combo.currentIndexChanged.connect(self._on_index_changed)
         layout.addWidget(self._combo, 1)
