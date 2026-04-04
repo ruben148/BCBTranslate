@@ -258,3 +258,63 @@ QToolTip {
     padding: 4px 8px;
     color: #4c4f69;
 }
+
+/* WebRTC panel */
+QPushButton#webrtcToggle {
+    background-color: #ffffff;
+    border: 1px solid #ccd0da;
+    border-radius: 8px;
+    padding: 8px 14px;
+    color: #4c4f69;
+    font-weight: bold;
+    font-size: 13px;
+    text-align: left;
+}
+
+QPushButton#webrtcToggle:hover {
+    background-color: #dce0e8;
+    border-color: #1e66f5;
+}
+
+QPushButton#webrtcToggle:checked {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom: none;
+    color: #1e66f5;
+}
+
+QWidget#webrtcContent {
+    background-color: #ffffff;
+    border: 1px solid #ccd0da;
+    border-top: none;
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+}
+
+QPushButton#webrtcStreamButton {
+    background-color: #1e66f5;
+    color: #ffffff;
+    font-weight: bold;
+    font-size: 13px;
+    padding: 7px 24px;
+    border: none;
+    border-radius: 6px;
+}
+
+QPushButton#webrtcStreamButton:hover {
+    background-color: #4580f7;
+}
+
+QPushButton#webrtcStreamButton[streaming="true"] {
+    background-color: #d20f39;
+}
+
+QPushButton#webrtcStreamButton[streaming="true"]:hover {
+    background-color: #e0334f;
+}
+
+QLabel#webrtcStatus {
+    color: #6c6f85;
+    font-style: italic;
+    background: transparent;
+}

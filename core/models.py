@@ -156,3 +156,9 @@ class AppConfig:
 
     # Updates
     auto_check_updates: bool = True
+
+    # WebRTC streaming
+    webrtc_whip_url: str = ""
+    webrtc_bearer_token: str = ""
+    webrtc_audio_source: str = "original"
+    webrtc_panel_expanded: bool = False

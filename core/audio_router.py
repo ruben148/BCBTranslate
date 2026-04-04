@@ -22,6 +22,8 @@ class AudioRouter:
         self._vu_lock = threading.Lock()
         self._current_rms: float = 0.0
         self._gain: float = 1.0
+        self._output_listeners: list[Callable[[bytes], None]] = []
+        self._output_listeners_lock = threading.Lock()
 
     # -- device enumeration ------------------------------------------------
 
@@ -185,6 +187,22 @@ class AudioRouter:
                 stream.write(audio_array)
             except Exception:
                 logger.debug("Output stream write error", exc_info=True)
+        with self._output_listeners_lock:
+            for listener in self._output_listeners:
+                try:
+                    listener(pcm_data)
+                except Exception:
+                    logger.debug("Output listener error", exc_info=True)
+
+    def add_output_listener(self, callback: Callable[[bytes], None]) -> None:
+        with self._output_listeners_lock:
+            if callback not in self._output_listeners:
+                self._output_listeners.append(callback)
+
+    def remove_output_listener(self, callback: Callable[[bytes], None]) -> None:
+        with self._output_listeners_lock:
+            if callback in self._output_listeners:
+                self._output_listeners.remove(callback)
 
     def close_output_streams(self) -> None:
         for stream in self._output_streams:

@@ -4,3 +4,4 @@ sounddevice>=0.4
 numpy>=1.26
 python-dotenv>=1.0
 pynput>=1.7
+aiortc>=1.9

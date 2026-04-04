@@ -15,7 +15,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSlider,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -26,13 +25,15 @@ from core.config_manager import ConfigManager
 from core.models import DeviceDirection, TranslationMetrics
 from core.translation_pipeline import TranslationPipeline
 from core.updater import UpdateChecker, UpdateInfo, prompt_and_install
+from core.webrtc_streamer import WebRTCStreamer
 from gui.settings_dialog import SettingsDialog
 from gui.tray import TrayIcon
 from gui.widgets.device_selector import DeviceSelector
-from gui.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox, NoScrollSpinBox
+from gui.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox, NoScrollSlider, NoScrollSpinBox
 from gui.widgets.lag_indicator import LagIndicator
 from gui.widgets.log_panel import LogPanel
 from gui.widgets.vu_meter import VUMeter
+from gui.widgets.webrtc_panel import WebRTCPanel
 from utils.hotkey_manager import HotkeyManager
 from version import GITHUB_REPO
 
@@ -76,6 +77,8 @@ class MainWindow(QMainWindow):
         self.resize(740, 920)
 
         self._audio_router.gain = self._cfg.config.input_gain
+
+        self._webrtc_streamer = WebRTCStreamer(audio_router, parent=self)
 
         self._build_ui()
         self._connect_signals()
@@ -159,7 +162,7 @@ class MainWindow(QMainWindow):
         # Input gain slider
         gain_row = QHBoxLayout()
         gain_row.addWidget(QLabel("Gain:"))
-        self._gain_slider = QSlider(Qt.Orientation.Horizontal)
+        self._gain_slider = NoScrollSlider(Qt.Orientation.Horizontal)
         self._gain_slider.setRange(0, 50)  # 0.0× – 5.0×
         self._gain_slider.setValue(int(self._cfg.config.input_gain * 10))
         self._gain_slider.setTickInterval(5)
@@ -286,7 +289,7 @@ class MainWindow(QMainWindow):
         # Speed slider
         speed_row = QHBoxLayout()
         speed_row.addWidget(QLabel("Speed:"))
-        self._speed_slider = QSlider(Qt.Orientation.Horizontal)
+        self._speed_slider = NoScrollSlider(Qt.Orientation.Horizontal)
         self._speed_slider.setRange(50, 200)  # 0.5× – 2.0×
         self._speed_slider.setValue(int(self._cfg.config.speaking_rate * 100))
         self._speed_slider.setTickInterval(25)
@@ -300,7 +303,7 @@ class MainWindow(QMainWindow):
         # Pitch slider
         pitch_row = QHBoxLayout()
         pitch_row.addWidget(QLabel("Pitch:"))
-        self._pitch_slider = QSlider(Qt.Orientation.Horizontal)
+        self._pitch_slider = NoScrollSlider(Qt.Orientation.Horizontal)
         self._pitch_slider.setRange(-50, 50)
         self._pitch_slider.setValue(self._parse_pitch(self._cfg.config.pitch))
         self._pitch_slider.setTickInterval(10)
@@ -350,6 +353,12 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(settings_btn)
 
         root.addWidget(status_group)
+
+        # ── WebRTC Stream panel (collapsible) ─────────────────────────────
+        self._webrtc_panel = WebRTCPanel(
+            self._webrtc_streamer, self._cfg, self._audio_router, parent=self
+        )
+        root.addWidget(self._webrtc_panel)
 
         # ── Log panel ────────────────────────────────────────────────────
         log_group = QGroupBox("Live Log")
@@ -611,6 +620,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         if self._pipeline.is_running:
             self._pipeline.stop()
+        if self._webrtc_streamer.state != "idle":
+            self._webrtc_streamer.stop()
         self._audio_router.shutdown()
         self._hotkey.stop()
         self._tray.hide()
