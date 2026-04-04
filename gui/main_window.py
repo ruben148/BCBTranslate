@@ -620,8 +620,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         if self._pipeline.is_running:
             self._pipeline.stop()
-        if self._webrtc_streamer.state != "idle":
-            self._webrtc_streamer.stop()
+        self._webrtc_streamer.shutdown()
         self._audio_router.shutdown()
         self._hotkey.stop()
         self._tray.hide()

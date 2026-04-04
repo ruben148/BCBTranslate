@@ -345,6 +345,22 @@ class _WHIPProxy:
         logger.info("WHIP proxy started on 127.0.0.1:%d → %s", port, self._target_url)
         return port
 
+    def delete_resource(self) -> None:
+        """Send DELETE for the tracked WHIP resource (best-effort)."""
+        url = self._resource_url
+        if not url:
+            return
+        try:
+            req = urllib.request.Request(url, method="DELETE")
+            if self._bearer_token:
+                req.add_header("Authorization", f"Bearer {self._bearer_token}")
+            with urllib.request.urlopen(req, timeout=5):
+                pass
+            logger.info("WHIP proxy: deleted resource %s", url)
+        except Exception:
+            logger.debug("WHIP proxy: resource DELETE failed for %s", url, exc_info=True)
+        self._resource_url = ""
+
     def stop(self) -> None:
         if self._server:
             self._server.shutdown()
@@ -459,6 +475,7 @@ class WebRTCStreamer(QObject):
         self._audio_router = audio_router
         self._state = "idle"
         self._backend: str | None = None  # "ffmpeg" | "aiortc"
+        self._closing = False
 
         # Shared
         self._capture_stream = None
@@ -507,6 +524,7 @@ class WebRTCStreamer(QObject):
             self._emit_log("WHIP URL is required", "error")
             return
 
+        self._closing = False
         self._cleanup_all()
         self._set_state("connecting")
 
@@ -549,11 +567,23 @@ class WebRTCStreamer(QObject):
         self._stop_audio_capture()
         if self._backend == "ffmpeg":
             self._stop_ffmpeg()
-        else:
+        elif self._backend == "aiortc":
             self._stop_aiortc()
         self._backend = None
         self._set_state("idle")
         self._emit_log("Stream stopped", "info")
+
+    def shutdown(self) -> None:
+        """Full teardown for application exit — safe to call from closeEvent."""
+        self._closing = True
+        if self._state != "idle":
+            self._stop_audio_capture()
+            if self._backend == "ffmpeg":
+                self._stop_ffmpeg()
+            elif self._backend == "aiortc":
+                self._stop_aiortc()
+        self._cleanup_all()
+        self._state = "idle"
 
     # ======================================================================
     # FFmpeg backend
@@ -653,6 +683,7 @@ class WebRTCStreamer(QObject):
         self._writer_thread = None
         self._stderr_thread = None
         if self._whip_proxy:
+            self._whip_proxy.delete_resource()
             self._whip_proxy.stop()
             self._whip_proxy = None
 
@@ -672,9 +703,13 @@ class WebRTCStreamer(QObject):
 
     def _ffmpeg_stderr_reader(self) -> None:
         """Parse FFmpeg stderr and forward relevant lines to the UI log."""
+        proc = self._process
+        if proc is None:
+            return
         connected_reported = False
+        error_seen = False
         try:
-            for raw_line in self._process.stderr:
+            for raw_line in proc.stderr:
                 text = raw_line.decode("utf-8", errors="replace").strip()
                 if not text:
                     continue
@@ -682,8 +717,11 @@ class WebRTCStreamer(QObject):
 
                 if "error" in lower or "failed" in lower or "invalid" in lower:
                     self._emit_log(text, "error")
-                elif not connected_reported and (
-                    "speed=" in lower or "size=" in lower
+                    error_seen = True
+                elif (
+                    not connected_reported
+                    and not error_seen
+                    and ("speed=" in lower or "size=" in lower)
                 ):
                     connected_reported = True
                     self._set_state("streaming")
@@ -694,11 +732,10 @@ class WebRTCStreamer(QObject):
                     self._emit_log(text, "info")
         except Exception:
             pass
-        if self._process:
-            rc = self._process.poll()
-            if rc and rc != 0 and self._state not in ("idle", "stopping"):
-                self._set_state("error")
-                self._emit_log(f"FFmpeg exited with code {rc}", "error")
+        rc = proc.poll()
+        if rc and rc != 0 and self._state not in ("idle", "stopping"):
+            self._set_state("error")
+            self._emit_log(f"FFmpeg exited with code {rc}", "error")
 
     # -- pipe-based audio capture (FFmpeg) ---------------------------------
 
@@ -954,13 +991,29 @@ class WebRTCStreamer(QObject):
         """Tear down any remnants from a prior run."""
         self._stop_audio_capture()
         # FFmpeg
-        if self._process and self._process.poll() is None:
-            self._process.kill()
-        self._process = None
         if self._write_queue:
             self._write_queue.put(None)
+        if self._process:
+            if self._process.stdin:
+                try:
+                    self._process.stdin.close()
+                except Exception:
+                    pass
+            if self._process.poll() is None:
+                try:
+                    self._process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self._process.kill()
+        self._process = None
         self._write_queue = None
+        if self._writer_thread and self._writer_thread.is_alive():
+            self._writer_thread.join(timeout=2)
+        self._writer_thread = None
+        if self._stderr_thread and self._stderr_thread.is_alive():
+            self._stderr_thread.join(timeout=2)
+        self._stderr_thread = None
         if self._whip_proxy:
+            self._whip_proxy.delete_resource()
             self._whip_proxy.stop()
             self._whip_proxy = None
         # aiortc
@@ -977,12 +1030,22 @@ class WebRTCStreamer(QObject):
 
     def _set_state(self, state: str) -> None:
         self._state = state
-        self.state_changed.emit(state)
+        if self._closing:
+            return
+        try:
+            self.state_changed.emit(state)
+        except RuntimeError:
+            pass
 
     def _emit_log(self, message: str, level: str) -> None:
-        self.log_message.emit(message, level)
         log_fn = getattr(logger, level if level != "success" else "info", logger.info)
         log_fn("WebRTC: %s", message)
+        if self._closing:
+            return
+        try:
+            self.log_message.emit(message, level)
+        except RuntimeError:
+            pass
 
     @staticmethod
     def _whip_post(url: str, sdp: str, token: str) -> tuple[str, str | None]:
