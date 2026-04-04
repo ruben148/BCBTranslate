@@ -76,8 +76,11 @@ python -m PyInstaller ^
     --name BCBTranslate ^
     --noconfirm ^
     --windowed ^
+    --icon "gui\resources\icons\app.ico" ^
     --add-data "gui\resources\styles\dark.qss;gui\resources\styles" ^
     --add-data "gui\resources\styles\light.qss;gui\resources\styles" ^
+    --add-data "gui\resources\icons\app.png;gui\resources\icons" ^
+    --add-data "gui\resources\icons\app.ico;gui\resources\icons" ^
     --add-data ".env.example;." ^
     --add-data "version.py;." ^
     --hidden-import azure.cognitiveservices.speech ^
