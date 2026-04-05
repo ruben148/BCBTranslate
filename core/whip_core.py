@@ -10,12 +10,20 @@ import ipaddress
 import logging
 import socket
 import threading
+import time
+import uuid
 from socketserver import ThreadingMixIn
 import urllib.error
 import urllib.request
 from urllib.parse import urljoin
 
 logger = logging.getLogger(__name__)
+
+
+def _short_url(url: str, max_len: int = 96) -> str:
+    if len(url) <= max_len:
+        return url
+    return url[: max_len - 3] + "..."
 
 
 class _ThreadingWhipHTTPServer(ThreadingMixIn, http.server.HTTPServer):
@@ -151,16 +159,27 @@ def whip_post_offer(url: str, sdp: str, token: str) -> tuple[str, str | None]:
         raise RuntimeError(f"Cannot reach WHIP server: {exc.reason}") from exc
 
 
-def whip_delete_resource(url: str, token: str) -> None:
+def whip_delete_resource(url: str, token: str) -> bool:
+    """DELETE the WHIP resource. Returns *True* on HTTP success (2xx)."""
     req = urllib.request.Request(url, method="DELETE")
     req.add_header("Connection", "close")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(req, timeout=5):
-            pass
-    except Exception:
-        logger.debug("WHIP DELETE failed for %s", url, exc_info=True)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            logger.info(
+                "WHIP DELETE ok status=%s resource=%s",
+                resp.status,
+                _short_url(url),
+            )
+            return True
+    except Exception as exc:
+        logger.warning(
+            "WHIP DELETE failed resource=%s: %s",
+            _short_url(url),
+            exc,
+        )
+        return False
 
 
 class WHIPProxy:
@@ -172,9 +191,11 @@ class WHIPProxy:
         self._server: http.server.HTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._resource_url: str = ""
+        self.session_id = uuid.uuid4().hex[:12]
 
     def start(self) -> int:
         proxy = self
+        sid = self.session_id
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, *_args: object) -> None:
@@ -188,6 +209,7 @@ class WHIPProxy:
                 if proxy._bearer_token:
                     headers["Authorization"] = f"Bearer {proxy._bearer_token}"
 
+                t0 = time.perf_counter()
                 try:
                     req = urllib.request.Request(
                         proxy._target_url, data=body,
@@ -198,7 +220,22 @@ class WHIPProxy:
                         answer_sdp = resp.read().decode("utf-8")
                         location = resp.headers.get("Location")
                         status = resp.status
+                    elapsed = time.perf_counter() - t0
+                    logger.info(
+                        "WHIP proxy [%s]: POST upstream %.3fs status=%s loc=%s",
+                        sid,
+                        elapsed,
+                        status,
+                        _short_url(location or ""),
+                    )
                 except urllib.error.HTTPError as exc:
+                    elapsed = time.perf_counter() - t0
+                    logger.warning(
+                        "WHIP proxy [%s]: POST upstream HTTP %s after %.3fs",
+                        sid,
+                        exc.code,
+                        elapsed,
+                    )
                     self.send_response(exc.code)
                     self.end_headers()
                     try:
@@ -207,7 +244,13 @@ class WHIPProxy:
                         pass
                     return
                 except Exception as exc:
-                    logger.error("WHIP proxy POST failed: %s", exc)
+                    elapsed = time.perf_counter() - t0
+                    logger.error(
+                        "WHIP proxy [%s]: POST upstream failed after %.3fs: %s",
+                        sid,
+                        elapsed,
+                        exc,
+                    )
                     self.send_response(502)
                     self.end_headers()
                     self.wfile.write(str(exc).encode())
@@ -235,9 +278,11 @@ class WHIPProxy:
             def do_DELETE(self) -> None:
                 url = proxy._resource_url
                 if not url:
+                    logger.info("WHIP proxy [%s]: DELETE (no resource URL)", sid)
                     self.send_response(200)
                     self.end_headers()
                     return
+                t0 = time.perf_counter()
                 try:
                     req = urllib.request.Request(url, method="DELETE")
                     req.add_header("Connection", "close")
@@ -247,9 +292,23 @@ class WHIPProxy:
                             f"Bearer {proxy._bearer_token}",
                         )
                     with urllib.request.urlopen(req, timeout=5) as resp:
+                        elapsed = time.perf_counter() - t0
+                        logger.info(
+                            "WHIP proxy [%s]: DELETE upstream %.3fs status=%s",
+                            sid,
+                            elapsed,
+                            resp.status,
+                        )
                         self.send_response(resp.status)
                         self.end_headers()
-                except Exception:
+                except Exception as exc:
+                    elapsed = time.perf_counter() - t0
+                    logger.warning(
+                        "WHIP proxy [%s]: DELETE upstream failed after %.3fs: %s",
+                        sid,
+                        elapsed,
+                        exc,
+                    )
                     self.send_response(200)
                     self.end_headers()
 
@@ -290,7 +349,12 @@ class WHIPProxy:
             target=self._server.serve_forever, daemon=True, name="whip-proxy",
         )
         self._thread.start()
-        logger.info("WHIP proxy started on 127.0.0.1:%d → %s", port, self._target_url)
+        logger.info(
+            "WHIP proxy [%s] started on 127.0.0.1:%d → %s",
+            self.session_id,
+            port,
+            self._target_url,
+        )
         return port
 
     def delete_resource(self) -> None:

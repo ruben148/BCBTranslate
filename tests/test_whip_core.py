@@ -12,6 +12,7 @@ from core.whip_core import (
     fix_ice_candidates,
     is_ip_address,
     resolve_sdp_hostnames,
+    whip_delete_resource,
     whip_post_offer,
 )
 
@@ -68,6 +69,24 @@ def test_whip_post_offer_http_error_includes_code() -> None:
     with patch("core.whip_core.urllib.request.urlopen", side_effect=err):
         with pytest.raises(RuntimeError, match="WHIP HTTP 401"):
             whip_post_offer("https://x/whip", "v=0\r\n", "")
+
+
+def test_whip_delete_resource_success() -> None:
+    mock_resp = MagicMock()
+    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+    mock_resp.__exit__ = MagicMock(return_value=False)
+    mock_resp.status = 204
+
+    with patch("core.whip_core.urllib.request.urlopen", return_value=mock_resp):
+        assert whip_delete_resource("https://x/whip/r1", "tok") is True
+
+
+def test_whip_delete_resource_failure_returns_false() -> None:
+    with patch(
+        "core.whip_core.urllib.request.urlopen",
+        side_effect=urllib.error.URLError("network"),
+    ):
+        assert whip_delete_resource("https://x/whip/r1", "") is False
 
 
 def test_whip_post_offer_success() -> None:

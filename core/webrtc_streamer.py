@@ -28,7 +28,7 @@ from typing import Callable
 from urllib.parse import urljoin
 
 import numpy as np
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, pyqtSignal
 
 from core.translated_pcm_adapter import TranslatedPcmStereoAdapter
 from core.whip_core import (
@@ -42,9 +42,23 @@ logger = logging.getLogger(__name__)
 
 _CREATIONFLAGS = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
 
-# Brief pause before opening a new WHIP session after the last one was torn down
-# (helps peers that release ICE/DTLS slightly behind our HTTP signaling).
-_WHIP_RECONNECT_SETTLE_SEC = 0.25
+# Pause before opening a new WHIP session after the last one was torn down.
+# ICE/DTLS state on the SFU often lags HTTP DELETE; 250ms was too aggressive
+# and showed intermittent "DTLS session failed" on back-to-back runs.
+_WHIP_RECONNECT_BASE_SEC = 1.0
+# Extra backoff after a failed connect (capped); see _whip_reconnect_delay_sec.
+_WHIP_RECONNECT_FAILURE_EXTRA_CAP_SEC = 8.0
+
+
+def _whip_reconnect_delay_sec(connect_failures: int) -> float:
+    """Minimum delay before the next WHIP session (larger after recent failures)."""
+    if connect_failures <= 0:
+        return _WHIP_RECONNECT_BASE_SEC
+    extra = min(
+        _WHIP_RECONNECT_FAILURE_EXTRA_CAP_SEC,
+        0.5 * (2 ** min(connect_failures - 1, 4)),
+    )
+    return _WHIP_RECONNECT_BASE_SEC + extra
 
 # Max rate for forwarding RMS into the WebRTC stream VU meter (audio thread).
 _STREAM_LEVEL_EMIT_INTERVAL_SEC = 0.05
@@ -217,9 +231,16 @@ class WebRTCStreamer(QObject):
     log_message = pyqtSignal(str, str)
     state_changed = pyqtSignal(str)
     stream_level_changed = pyqtSignal(float)
+    # Emitted when FFmpeg's stderr pipe closes so the main thread can join/cleanup
+    # without deadlocking (never call _stop_ffmpeg from the stderr thread).
+    ffmpeg_teardown_requested = pyqtSignal()
 
     def __init__(self, audio_router, parent: QObject | None = None) -> None:
         super().__init__(parent)
+        self.ffmpeg_teardown_requested.connect(
+            self._on_ffmpeg_teardown_requested,
+            Qt.ConnectionType.QueuedConnection,
+        )
         self._audio_router = audio_router
         self._state = "idle"
         self._backend: str | None = None  # "ffmpeg" | "aiortc"
@@ -246,6 +267,7 @@ class WebRTCStreamer(QObject):
         self._whip_resource_url: str | None = None
         self._whip_bearer_token: str = ""
         self._whip_earliest_reconnect_mono: float = 0.0
+        self._whip_connect_failures: int = 0
 
         # WebRTC-only gain + VU (see WebRTCPanel stream meter).
         self._stream_gain: float = 1.0
@@ -277,13 +299,18 @@ class WebRTCStreamer(QObject):
             pass
 
     def _mark_whip_reconnect_settle(self) -> None:
-        self._whip_earliest_reconnect_mono = (
-            time.monotonic() + _WHIP_RECONNECT_SETTLE_SEC
+        delay = _whip_reconnect_delay_sec(self._whip_connect_failures)
+        self._whip_earliest_reconnect_mono = time.monotonic() + delay
+        logger.info(
+            "WebRTC: WHIP reconnect gate set to %.2fs (connect_failures=%d)",
+            delay,
+            self._whip_connect_failures,
         )
 
     def _wait_whip_reconnect_settle(self) -> None:
         rem = self._whip_earliest_reconnect_mono - time.monotonic()
         if rem > 0:
+            logger.info("WebRTC: WHIP reconnect settle sleeping %.3fs", rem)
             time.sleep(rem)
 
     @property
@@ -410,9 +437,15 @@ class WebRTCStreamer(QObject):
 
         self._whip_proxy = WHIPProxy(url, token)
         proxy_port = self._whip_proxy.start()
+        sid = self._whip_proxy.session_id
         proxy_url = f"http://127.0.0.1:{proxy_port}/"
         self._emit_log(
-            f"WHIP proxy on :{proxy_port} (fixes ICE candidates)", "info",
+            f"WHIP session {sid} proxy :{proxy_port} (ICE fix)", "info",
+        )
+        logger.info(
+            "WebRTC: FFmpeg WHIP session=%s proxy_port=%d pid will follow",
+            sid,
+            proxy_port,
         )
 
         cmd: list[str] = [
@@ -454,6 +487,11 @@ class WebRTCStreamer(QObject):
             return
 
         self._emit_log(f"FFmpeg started (PID {self._process.pid})", "info")
+        logger.info(
+            "WebRTC: FFmpeg PID=%s WHIP session=%s",
+            self._process.pid,
+            getattr(self._whip_proxy, "session_id", "?"),
+        )
 
         self._write_queue = queue.Queue(maxsize=384)
         self._writer_thread = threading.Thread(
@@ -573,6 +611,7 @@ class WebRTCStreamer(QObject):
                     and ("speed=" in lower or "size=" in lower)
                 ):
                     connected_reported = True
+                    self._whip_connect_failures = 0
                     self._set_state("streaming")
                     self._emit_log("Streaming audio", "success")
                 elif any(k in lower for k in ("whip", "ice", "dtls")):
@@ -585,10 +624,62 @@ class WebRTCStreamer(QObject):
             pass
         if self._process is not proc:
             return
-        rc = proc.poll()
-        if rc and rc != 0 and self._state not in ("idle", "stopping"):
+
+        # poll() is often still None right after stderr EOF — reap a real exit code
+        try:
+            if proc.poll() is None:
+                proc.wait(timeout=20)
+        except Exception:
+            pass
+        rc = proc.returncode
+
+        prev_state = self._state
+        if self._process is not proc:
+            return
+        if prev_state in ("idle", "stopping"):
+            return
+
+        if prev_state == "connecting":
+            self._whip_connect_failures = min(self._whip_connect_failures + 1, 32)
+            logger.warning(
+                "WebRTC: WHIP connect failed (failures=%s ffmpeg_rc=%s stderr_errors=%s)",
+                self._whip_connect_failures,
+                rc,
+                error_seen,
+            )
             self._set_state("error")
-            self._emit_log(f"FFmpeg exited with code {rc}", "error")
+            if rc not in (0, None):
+                self._emit_log(f"FFmpeg exited with code {rc}", "error")
+            elif error_seen:
+                self._emit_log("FFmpeg stopped after errors", "error")
+            else:
+                self._emit_log("FFmpeg exited before the stream started", "error")
+            self.ffmpeg_teardown_requested.emit()
+        elif prev_state == "streaming":
+            if rc == 0 and not error_seen:
+                self._set_state("idle")
+                self._emit_log("Stream ended", "info")
+            else:
+                self._set_state("error")
+                if rc not in (0, None):
+                    self._emit_log(f"FFmpeg exited with code {rc}", "error")
+                elif error_seen:
+                    self._emit_log("FFmpeg stopped after errors", "error")
+                else:
+                    self._emit_log("Stream stopped unexpectedly", "error")
+            self.ffmpeg_teardown_requested.emit()
+
+    def _on_ffmpeg_teardown_requested(self) -> None:
+        """Finish FFmpeg cleanup on the GUI thread (safe to join stderr reader)."""
+        if self._backend != "ffmpeg":
+            return
+        try:
+            self._stop_audio_capture()
+            if self._process is not None:
+                self._stop_ffmpeg()
+        finally:
+            self._backend = None
+            self._reset_stream_level_meter()
 
     # -- pipe-based audio capture (FFmpeg) ---------------------------------
 
