@@ -396,7 +396,8 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Expanding,
         )
         log_layout = QVBoxLayout(log_group)
-        log_layout.setContentsMargins(0, 0, 0, 0)
+        # Inset the text viewport slightly inside the group frame
+        log_layout.setContentsMargins(8, 8, 8, 8)
         log_layout.setSpacing(0)
         self._log_panel = LogPanel()
         log_layout.addWidget(self._log_panel, 1)
