@@ -14,7 +14,6 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QScrollArea,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -79,8 +78,8 @@ class MainWindow(QMainWindow):
         icon = _icon_path()
         if icon.exists():
             self.setWindowIcon(QIcon(str(icon)))
-        self.setMinimumSize(680, 640)
-        self.resize(740, 920)
+        self.setMinimumSize(680, 600)
+        self.resize(740, 780)
 
         self._audio_router.gain = self._cfg.config.input_gain
 
@@ -107,7 +106,9 @@ class MainWindow(QMainWindow):
 
         # Global hotkey
         self._hotkey = HotkeyManager(self._cfg.config.hotkey_start_stop, self)
-        self._hotkey.triggered.connect(self.toggle_translation)
+        self._hotkey.triggered.connect(
+            self.toggle_translation, Qt.ConnectionType.QueuedConnection
+        )
         self._hotkey.start()
 
         # Window flags
@@ -133,25 +134,27 @@ class MainWindow(QMainWindow):
         root.setSpacing(8)
         root.setContentsMargins(14, 14, 14, 14)
 
-        # ── Scrollable control panels ─────────────────────────────────────
-        # Wrapping Audio → Voice Tuning in a scroll area lets the window
-        # shrink on smaller displays without clipping any controls.
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-        scroll_container = QWidget()
-        scroll_layout = QVBoxLayout(scroll_container)
-        scroll_layout.setSpacing(8)
-        scroll_layout.setContentsMargins(0, 0, 4, 0)  # small right margin for scrollbar
+        # ── Control panels (no outer scroll — sections stay visible) ─────
+        controls_panel = QWidget()
+        controls_layout = QVBoxLayout(controls_panel)
+        controls_layout.setSpacing(8)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
 
         # ── Audio section ────────────────────────────────────────────────
         audio_group = QGroupBox("Audio")
         audio_layout = QVBoxLayout(audio_group)
 
-        # Input device
+        self._audio_devices_toggle = QPushButton()
+        self._audio_devices_toggle.setObjectName("panelSectionToggle")
+        self._audio_devices_toggle.setCheckable(True)
+        self._audio_devices_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._audio_devices_toggle.toggled.connect(self._on_audio_devices_toggle)
+        audio_layout.addWidget(self._audio_devices_toggle)
+
+        self._audio_devices_widget = QWidget()
+        dev_layout = QVBoxLayout(self._audio_devices_widget)
+        dev_layout.setContentsMargins(0, 0, 0, 0)
+
         in_row = QHBoxLayout()
         in_row.addWidget(QLabel("Input:"))
         self._input_selector = DeviceSelector(
@@ -159,15 +162,35 @@ class MainWindow(QMainWindow):
         )
         self._input_selector.device_changed.connect(self._on_input_device_changed)
         in_row.addWidget(self._input_selector, 1)
-        audio_layout.addLayout(in_row)
+        dev_layout.addLayout(in_row)
 
-        # VU meter
+        out_row = QHBoxLayout()
+        out_row.addWidget(QLabel("Output:"))
+        self._output_selector = DeviceSelector(
+            self._audio_router, DeviceDirection.OUTPUT
+        )
+        self._output_selector.device_changed.connect(self._on_output_device_changed)
+        out_row.addWidget(self._output_selector, 1)
+        dev_layout.addLayout(out_row)
+
+        sec_row = QHBoxLayout()
+        sec_row.addWidget(QLabel("2nd Out:"))
+        self._secondary_selector = DeviceSelector(
+            self._audio_router, DeviceDirection.OUTPUT
+        )
+        self._secondary_selector.device_changed.connect(
+            self._on_secondary_device_changed
+        )
+        sec_row.addWidget(self._secondary_selector, 1)
+        dev_layout.addLayout(sec_row)
+
+        audio_layout.addWidget(self._audio_devices_widget)
+
         self._vu_meter = VUMeter()
         audio_layout.addWidget(self._vu_meter)
         if not self._cfg.config.show_vu_meter:
             self._vu_meter.hide()
 
-        # Input gain slider
         gain_row = QHBoxLayout()
         gain_row.addWidget(QLabel("Gain:"))
         self._gain_slider = NoScrollSlider(Qt.Orientation.Horizontal)
@@ -181,35 +204,56 @@ class MainWindow(QMainWindow):
         gain_row.addWidget(self._gain_label)
         audio_layout.addLayout(gain_row)
 
-        # Output device
-        out_row = QHBoxLayout()
-        out_row.addWidget(QLabel("Output:"))
-        self._output_selector = DeviceSelector(
-            self._audio_router, DeviceDirection.OUTPUT
-        )
-        self._output_selector.device_changed.connect(self._on_output_device_changed)
-        out_row.addWidget(self._output_selector, 1)
-        audio_layout.addLayout(out_row)
+        ad_exp = self._cfg.config.audio_devices_expanded
+        self._audio_devices_widget.setVisible(ad_exp)
+        self._audio_devices_toggle.blockSignals(True)
+        self._audio_devices_toggle.setChecked(ad_exp)
+        self._audio_devices_toggle.blockSignals(False)
+        self._refresh_audio_devices_toggle_label()
 
-        # Secondary output
-        sec_row = QHBoxLayout()
-        sec_row.addWidget(QLabel("2nd Out:"))
-        self._secondary_selector = DeviceSelector(
-            self._audio_router, DeviceDirection.OUTPUT
-        )
-        self._secondary_selector.device_changed.connect(
-            self._on_secondary_device_changed
-        )
-        sec_row.addWidget(self._secondary_selector, 1)
-        audio_layout.addLayout(sec_row)
+        controls_layout.addWidget(audio_group)
 
-        scroll_layout.addWidget(audio_group)
+        # ── Translation section ──────────────────────────────────────────
+        trans_group = QGroupBox("Translation")
+        trans_layout = QHBoxLayout(trans_group)
 
-        # ── Segmentation section ─────────────────────────────────────────
-        seg_group = QGroupBox("Segmentation")
-        seg_layout = QVBoxLayout(seg_group)
+        trans_layout.addWidget(QLabel("From:"))
+        self._source_label = QLabel(self._cfg.config.source_language)
+        self._source_label.setStyleSheet("font-weight: bold;")
+        trans_layout.addWidget(self._source_label)
 
-        # Silence timeout
+        trans_layout.addWidget(QLabel("→"))
+
+        trans_layout.addWidget(QLabel("To:"))
+        self._target_label = QLabel(self._cfg.config.target_language)
+        self._target_label.setStyleSheet("font-weight: bold;")
+        trans_layout.addWidget(self._target_label)
+
+        trans_layout.addStretch()
+
+        trans_layout.addWidget(QLabel("Voice:"))
+        self._voice_label = QLabel(self._cfg.config.voice_name)
+        self._voice_label.setStyleSheet("font-weight: bold;")
+        trans_layout.addWidget(self._voice_label)
+
+        controls_layout.addWidget(trans_group)
+
+        # ── Segmentation section (collapsed by default) ──────────────────
+        seg_section = QWidget()
+        seg_outer = QVBoxLayout(seg_section)
+        seg_outer.setContentsMargins(0, 0, 0, 0)
+
+        self._seg_toggle = QPushButton()
+        self._seg_toggle.setObjectName("panelSectionToggle")
+        self._seg_toggle.setCheckable(True)
+        self._seg_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._seg_toggle.toggled.connect(self._on_segmentation_panel_toggle)
+        seg_outer.addWidget(self._seg_toggle)
+
+        self._seg_content = QWidget()
+        seg_layout = QVBoxLayout(self._seg_content)
+        seg_layout.setContentsMargins(12, 0, 12, 8)
+
         silence_row = QHBoxLayout()
         silence_row.addWidget(QLabel("Silence:"))
         self._seg_timeout_spin = NoScrollSpinBox()
@@ -227,7 +271,6 @@ class MainWindow(QMainWindow):
         silence_row.addWidget(self._seg_timeout_spin, 1)
         seg_layout.addLayout(silence_row)
 
-        # Auto-adjust checkbox
         self._auto_seg_cb = QCheckBox("Auto-adjust segmentation timeout")
         self._auto_seg_cb.setToolTip(
             "Automatically tune the segmentation silence timeout based on\n"
@@ -237,7 +280,6 @@ class MainWindow(QMainWindow):
         self._auto_seg_cb.toggled.connect(self._on_auto_seg_toggled)
         seg_layout.addWidget(self._auto_seg_cb)
 
-        # Target min / max row
         thresh_row = QHBoxLayout()
         thresh_row.addWidget(QLabel("Target min:"))
         self._auto_seg_min_spin = NoScrollDoubleSpinBox()
@@ -263,38 +305,33 @@ class MainWindow(QMainWindow):
         thresh_row.addWidget(self._auto_seg_max_spin)
         seg_layout.addLayout(thresh_row)
 
-        scroll_layout.addWidget(seg_group)
+        seg_outer.addWidget(self._seg_content)
 
-        # ── Translation section ──────────────────────────────────────────
-        trans_group = QGroupBox("Translation")
-        trans_layout = QHBoxLayout(trans_group)
+        seg_exp = self._cfg.config.segmentation_panel_expanded
+        self._seg_content.setVisible(seg_exp)
+        self._seg_toggle.blockSignals(True)
+        self._seg_toggle.setChecked(seg_exp)
+        self._seg_toggle.blockSignals(False)
+        self._refresh_segmentation_toggle_label()
 
-        trans_layout.addWidget(QLabel("From:"))
-        self._source_label = QLabel(self._cfg.config.source_language)
-        self._source_label.setStyleSheet("font-weight: bold;")
-        trans_layout.addWidget(self._source_label)
+        controls_layout.addWidget(seg_section)
 
-        trans_layout.addWidget(QLabel("→"))
+        # ── Voice Tuning (collapsed by default) ───────────────────────────
+        tuning_section = QWidget()
+        tune_outer = QVBoxLayout(tuning_section)
+        tune_outer.setContentsMargins(0, 0, 0, 0)
 
-        trans_layout.addWidget(QLabel("To:"))
-        self._target_label = QLabel(self._cfg.config.target_language)
-        self._target_label.setStyleSheet("font-weight: bold;")
-        trans_layout.addWidget(self._target_label)
+        self._voice_toggle = QPushButton()
+        self._voice_toggle.setObjectName("panelSectionToggle")
+        self._voice_toggle.setCheckable(True)
+        self._voice_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._voice_toggle.toggled.connect(self._on_voice_tuning_panel_toggle)
+        tune_outer.addWidget(self._voice_toggle)
 
-        trans_layout.addStretch()
+        self._voice_content = QWidget()
+        tuning_layout = QVBoxLayout(self._voice_content)
+        tuning_layout.setContentsMargins(12, 0, 12, 8)
 
-        trans_layout.addWidget(QLabel("Voice:"))
-        self._voice_label = QLabel(self._cfg.config.voice_name)
-        self._voice_label.setStyleSheet("font-weight: bold;")
-        trans_layout.addWidget(self._voice_label)
-
-        scroll_layout.addWidget(trans_group)
-
-        # ── Voice Tuning section ─────────────────────────────────────────
-        tuning_group = QGroupBox("Voice Tuning")
-        tuning_layout = QVBoxLayout(tuning_group)
-
-        # Speed slider
         speed_row = QHBoxLayout()
         speed_row.addWidget(QLabel("Speed:"))
         self._speed_slider = NoScrollSlider(Qt.Orientation.Horizontal)
@@ -308,7 +345,6 @@ class MainWindow(QMainWindow):
         speed_row.addWidget(self._speed_label)
         tuning_layout.addLayout(speed_row)
 
-        # Pitch slider
         pitch_row = QHBoxLayout()
         pitch_row.addWidget(QLabel("Pitch:"))
         self._pitch_slider = NoScrollSlider(Qt.Orientation.Horizontal)
@@ -322,11 +358,18 @@ class MainWindow(QMainWindow):
         pitch_row.addWidget(self._pitch_label)
         tuning_layout.addLayout(pitch_row)
 
-        scroll_layout.addWidget(tuning_group)
-        scroll_layout.addStretch()  # push groups to top within the scroll area
+        tune_outer.addWidget(self._voice_content)
 
-        scroll_area.setWidget(scroll_container)
-        root.addWidget(scroll_area, 2)  # takes 2/3 of vertical space
+        vt_exp = self._cfg.config.voice_tuning_panel_expanded
+        self._voice_content.setVisible(vt_exp)
+        self._voice_toggle.blockSignals(True)
+        self._voice_toggle.setChecked(vt_exp)
+        self._voice_toggle.blockSignals(False)
+        self._refresh_voice_tuning_toggle_label()
+
+        controls_layout.addWidget(tuning_section)
+
+        root.addWidget(controls_panel, 0)
 
         # ── Status section ───────────────────────────────────────────────
         status_group = QGroupBox("Status")
@@ -362,18 +405,21 @@ class MainWindow(QMainWindow):
 
         root.addWidget(status_group)
 
-        # ── WebRTC Stream panel (collapsible) ─────────────────────────────
-        self._webrtc_panel = WebRTCPanel(
-            self._webrtc_streamer, self._cfg, self._audio_router, parent=self
-        )
-        root.addWidget(self._webrtc_panel)
-
-        # ── Log panel ────────────────────────────────────────────────────
+        # ── Log panel (fixed vertical budget so controls stay on screen) ─
         log_group = QGroupBox("Live Log")
         log_layout = QVBoxLayout(log_group)
         self._log_panel = LogPanel()
         log_layout.addWidget(self._log_panel)
-        root.addWidget(log_group, 1)  # stretch factor
+        log_group.setMinimumHeight(120)
+        log_group.setMaximumHeight(240)
+        root.addWidget(log_group, 0)
+
+        # ── WebRTC Stream panel (bottom; details expandable) ────────────
+        self._webrtc_panel = WebRTCPanel(
+            self._webrtc_streamer, self._cfg, self._audio_router, parent=self
+        )
+        root.addWidget(self._webrtc_panel, 0)
+        root.addStretch(1)
 
         # ── Status bar ───────────────────────────────────────────────────
         self._status_bar = QStatusBar()
@@ -448,6 +494,36 @@ class MainWindow(QMainWindow):
         self._gain_label.setText(f"{gain:.1f}×")
         self._cfg.set("input_gain", gain)
         self._audio_router.gain = gain
+
+    def _refresh_audio_devices_toggle_label(self) -> None:
+        on = self._audio_devices_toggle.isChecked()
+        arrow = "\u25bc" if on else "\u25b6"
+        self._audio_devices_toggle.setText(f"{arrow}  Input & output settings")
+
+    def _on_audio_devices_toggle(self, expanded: bool) -> None:
+        self._audio_devices_widget.setVisible(expanded)
+        self._cfg.set("audio_devices_expanded", expanded)
+        self._refresh_audio_devices_toggle_label()
+
+    def _refresh_segmentation_toggle_label(self) -> None:
+        on = self._seg_toggle.isChecked()
+        arrow = "\u25bc" if on else "\u25b6"
+        self._seg_toggle.setText(f"{arrow}  Segmentation")
+
+    def _on_segmentation_panel_toggle(self, expanded: bool) -> None:
+        self._seg_content.setVisible(expanded)
+        self._cfg.set("segmentation_panel_expanded", expanded)
+        self._refresh_segmentation_toggle_label()
+
+    def _refresh_voice_tuning_toggle_label(self) -> None:
+        on = self._voice_toggle.isChecked()
+        arrow = "\u25bc" if on else "\u25b6"
+        self._voice_toggle.setText(f"{arrow}  Voice Tuning")
+
+    def _on_voice_tuning_panel_toggle(self, expanded: bool) -> None:
+        self._voice_content.setVisible(expanded)
+        self._cfg.set("voice_tuning_panel_expanded", expanded)
+        self._refresh_voice_tuning_toggle_label()
 
     # -- segmentation controls -----------------------------------------------
 

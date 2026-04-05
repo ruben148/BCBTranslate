@@ -138,6 +138,9 @@ class AppConfig:
     theme: str = "dark"
     hotkey_start_stop: str = "Ctrl+Shift+T"
     show_vu_meter: bool = True
+    audio_devices_expanded: bool = False
+    segmentation_panel_expanded: bool = False
+    voice_tuning_panel_expanded: bool = False
 
     # Logging
     log_to_file: bool = False

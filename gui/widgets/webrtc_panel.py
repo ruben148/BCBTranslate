@@ -110,19 +110,60 @@ class WebRTCPanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Toggle header
+        # Toggle header (expand/collapse URL, token, source, backend, log)
         self._toggle_btn = QPushButton("\u25b6  WebRTC Stream")
         self._toggle_btn.setObjectName("webrtcToggle")
         self._toggle_btn.setCheckable(True)
         self._toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         root.addWidget(self._toggle_btn)
 
-        # Collapsible content
+        # Always visible: start/stop, stream meter, gain, status
+        self._summary = QWidget()
+        self._summary.setObjectName("webrtcSummary")
+        sl = QHBoxLayout(self._summary)
+        sl.setContentsMargins(12, 8, 12, 8)
+        sl.setSpacing(10)
+
+        self._stream_btn = QPushButton("START STREAM")
+        self._stream_btn.setObjectName("webrtcStreamButton")
+        self._stream_btn.setFixedWidth(160)
+        self._stream_btn.clicked.connect(self._toggle_stream)
+        sl.addWidget(self._stream_btn)
+
+        self._stream_meter = VUMeter()
+        self._stream_meter.setMinimumHeight(12)
+        self._stream_meter.setMaximumHeight(16)
+        self._stream_meter.setMinimumWidth(100)
+        sl.addWidget(self._stream_meter, 1)
+
+        self._stream_gain_slider = NoScrollSlider(Qt.Orientation.Horizontal)
+        self._stream_gain_slider.setRange(0, 50)
+        self._stream_gain_slider.setFixedWidth(120)
+        self._stream_gain_slider.setToolTip(
+            "Gain for the WebRTC stream only (not local output or translation input)"
+        )
+        self._stream_gain_slider.valueChanged.connect(self._on_stream_gain_slider)
+        sl.addWidget(self._stream_gain_slider)
+        self._stream_gain_label = QLabel("1.0×")
+        self._stream_gain_label.setFixedWidth(36)
+        self._stream_gain_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        sl.addWidget(self._stream_gain_label)
+
+        sl.addSpacing(8)
+        self._status_label = QLabel("Idle")
+        self._status_label.setObjectName("webrtcStatus")
+        sl.addWidget(self._status_label)
+
+        root.addWidget(self._summary)
+
+        # Collapsible details (WHIP, token, routing, log)
         self._content = QWidget()
         self._content.setObjectName("webrtcContent")
         self._content.setVisible(False)
         cl = QVBoxLayout(self._content)
-        cl.setContentsMargins(12, 10, 12, 10)
+        cl.setContentsMargins(12, 4, 12, 10)
         cl.setSpacing(8)
 
         # WHIP URL
@@ -183,43 +224,6 @@ class WebRTCPanel(QWidget):
         backend_row.addWidget(self._backend_combo, 1)
         cl.addLayout(backend_row)
 
-        # Stream output level (post-gain) and gain — does not affect speakers or Azure.
-        stream_row = QHBoxLayout()
-        lbl5 = QLabel("Stream:")
-        lbl5.setFixedWidth(72)
-        stream_row.addWidget(lbl5)
-        self._stream_meter = VUMeter()
-        self._stream_meter.setMinimumHeight(12)
-        self._stream_meter.setMaximumHeight(16)
-        self._stream_meter.setMinimumWidth(100)
-        stream_row.addWidget(self._stream_meter, 1)
-        self._stream_gain_slider = NoScrollSlider(Qt.Orientation.Horizontal)
-        self._stream_gain_slider.setRange(0, 50)
-        self._stream_gain_slider.setFixedWidth(120)
-        self._stream_gain_slider.setToolTip(
-            "Gain for the WebRTC stream only (not local output or translation input)"
-        )
-        self._stream_gain_slider.valueChanged.connect(self._on_stream_gain_slider)
-        stream_row.addWidget(self._stream_gain_slider)
-        self._stream_gain_label = QLabel("1.0×")
-        self._stream_gain_label.setFixedWidth(36)
-        self._stream_gain_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        stream_row.addWidget(self._stream_gain_label)
-        cl.addLayout(stream_row)
-
-        # Controls row
-        ctrl_row = QHBoxLayout()
-        self._stream_btn = QPushButton("START STREAM")
-        self._stream_btn.setObjectName("webrtcStreamButton")
-        self._stream_btn.setFixedWidth(160)
-        self._stream_btn.clicked.connect(self._toggle_stream)
-        ctrl_row.addWidget(self._stream_btn)
-        ctrl_row.addStretch()
-        self._status_label = QLabel("Idle")
-        self._status_label.setObjectName("webrtcStatus")
-        ctrl_row.addWidget(self._status_label)
-        cl.addLayout(ctrl_row)
-
         # Stream log
         self._log = _StreamLog()
         self._log.setFixedHeight(150)
@@ -266,8 +270,14 @@ class WebRTCPanel(QWidget):
         if bidx >= 0:
             self._backend_combo.setCurrentIndex(bidx)
 
-        if cfg.webrtc_panel_expanded:
-            self._toggle_btn.setChecked(True)
+        exp = cfg.webrtc_panel_expanded
+        self._toggle_btn.blockSignals(True)
+        self._toggle_btn.setChecked(exp)
+        self._content.setVisible(exp)
+        self._toggle_btn.blockSignals(False)
+        arrow = "\u25bc" if exp else "\u25b6"
+        self._toggle_btn.setText(f"{arrow}  WebRTC Stream")
+        self._sync_webrtc_summary_chrome(exp)
 
         g = max(0.0, min(5.0, cfg.webrtc_stream_gain))
         self._stream_gain_slider.setValue(int(round(g * 10)))
@@ -276,8 +286,14 @@ class WebRTCPanel(QWidget):
 
     # -- slots -------------------------------------------------------------
 
+    def _sync_webrtc_summary_chrome(self, details_open: bool) -> None:
+        self._summary.setProperty("detailsOpen", details_open)
+        self._summary.style().unpolish(self._summary)
+        self._summary.style().polish(self._summary)
+
     def _on_toggle(self, expanded: bool) -> None:
         self._content.setVisible(expanded)
+        self._sync_webrtc_summary_chrome(expanded)
         arrow = "\u25bc" if expanded else "\u25b6"
         self._toggle_btn.setText(f"{arrow}  WebRTC Stream")
         self._cfg.set("webrtc_panel_expanded", expanded)

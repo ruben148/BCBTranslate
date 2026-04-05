@@ -259,8 +259,8 @@ QToolTip {
     color: #4c4f69;
 }
 
-/* WebRTC panel */
-QPushButton#webrtcToggle {
+/* WebRTC panel + collapsible main-window sections */
+QPushButton#webrtcToggle, QPushButton#panelSectionToggle {
     background-color: #ffffff;
     border: 1px solid #ccd0da;
     border-radius: 8px;
@@ -271,16 +271,28 @@ QPushButton#webrtcToggle {
     text-align: left;
 }
 
-QPushButton#webrtcToggle:hover {
+QPushButton#webrtcToggle:hover, QPushButton#panelSectionToggle:hover {
     background-color: #dce0e8;
     border-color: #1e66f5;
 }
 
-QPushButton#webrtcToggle:checked {
+QPushButton#webrtcToggle:checked, QPushButton#panelSectionToggle:checked {
+    color: #1e66f5;
+}
+
+QWidget#webrtcSummary {
+    background-color: #ffffff;
+    border-left: 1px solid #ccd0da;
+    border-right: 1px solid #ccd0da;
+    border-bottom: 1px solid #ccd0da;
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+}
+
+QWidget#webrtcSummary[detailsOpen="true"] {
+    border-bottom: none;
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
-    border-bottom: none;
-    color: #1e66f5;
 }
 
 QWidget#webrtcContent {
