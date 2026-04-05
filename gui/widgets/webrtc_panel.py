@@ -1,15 +1,15 @@
-"""Collapsible WebRTC streaming panel for the main window."""
+"""WebRTC streaming panel: transport controls on the main window; WHIP settings in a dialog."""
 
 from __future__ import annotations
 
 from datetime import datetime
 
 from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor
+from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
+    QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
@@ -20,6 +20,7 @@ from core.audio_router import AudioRouter
 from core.config_manager import ConfigManager
 from core.models import DeviceDirection
 from core.webrtc_streamer import HAS_ANY_BACKEND, HAS_FFMPEG_WHIP, WebRTCStreamer
+from gui.webrtc_settings_dialog import WebRTCStreamSettingsDialog
 from gui.widgets.no_scroll_spinbox import NoScrollComboBox, NoScrollSlider
 from gui.widgets.vu_meter import VUMeter
 
@@ -28,6 +29,7 @@ class _StreamLog(QWidget):
     """Lightweight color-coded log for WebRTC events."""
 
     MAX_BLOCKS = 500
+    _LOG_FONT_PT = 10
 
     _COLORS = {
         "info": QColor(180, 180, 180),
@@ -36,10 +38,10 @@ class _StreamLog(QWidget):
         "error": QColor(244, 67, 54),
     }
     _ICONS = {
-        "info": "\u24d8",      # ⓘ
-        "success": "\u2713",   # ✓
-        "warning": "\u26a0",   # ⚠
-        "error": "\u2716",     # ✖
+        "info": "\u24d8",
+        "success": "\u2713",
+        "warning": "\u26a0",
+        "error": "\u2716",
     }
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -49,6 +51,9 @@ class _StreamLog(QWidget):
         self._text = QTextEdit()
         self._text.setReadOnly(True)
         self._text.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        _lf = QFont(self._text.font())
+        _lf.setPointSize(self._LOG_FONT_PT)
+        self._text.setFont(_lf)
         layout.addWidget(self._text)
 
     @pyqtSlot(str, str)
@@ -80,12 +85,7 @@ class _StreamLog(QWidget):
 
 
 class WebRTCPanel(QWidget):
-    """Collapsible panel for WebRTC WHIP audio streaming.
-
-    Sits on the main window and can be expanded/collapsed with a single
-    click.  Contains URL/token inputs, audio-source selector, start/stop
-    button, and a dedicated stream log.
-    """
+    """WebRTC WHIP streaming: controls and log on the main window; URL/token/backend in a dialog."""
 
     def __init__(
         self,
@@ -103,38 +103,29 @@ class WebRTCPanel(QWidget):
         self._connect_signals()
         self._restore_state()
 
-    # -- ui ----------------------------------------------------------------
-
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        root.setSpacing(8)
 
-        # Toggle header (expand/collapse URL, token, source, backend, log)
-        self._toggle_btn = QPushButton("\u25b6  WebRTC Stream")
-        self._toggle_btn.setObjectName("webrtcToggle")
-        self._toggle_btn.setCheckable(True)
-        self._toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        root.addWidget(self._toggle_btn)
+        group = QGroupBox("WebRTC Stream")
+        gl = QVBoxLayout(group)
+        gl.setSpacing(8)
 
-        # Always visible: start/stop, stream meter, gain, status
-        self._summary = QWidget()
-        self._summary.setObjectName("webrtcSummary")
-        sl = QHBoxLayout(self._summary)
-        sl.setContentsMargins(12, 8, 12, 8)
-        sl.setSpacing(10)
+        ctrl = QHBoxLayout()
+        ctrl.setSpacing(10)
 
         self._stream_btn = QPushButton("START STREAM")
         self._stream_btn.setObjectName("webrtcStreamButton")
         self._stream_btn.setFixedWidth(160)
         self._stream_btn.clicked.connect(self._toggle_stream)
-        sl.addWidget(self._stream_btn)
+        ctrl.addWidget(self._stream_btn)
 
         self._stream_meter = VUMeter()
         self._stream_meter.setMinimumHeight(12)
         self._stream_meter.setMaximumHeight(16)
         self._stream_meter.setMinimumWidth(100)
-        sl.addWidget(self._stream_meter, 1)
+        ctrl.addWidget(self._stream_meter, 1)
 
         self._stream_gain_slider = NoScrollSlider(Qt.Orientation.Horizontal)
         self._stream_gain_slider.setRange(0, 50)
@@ -143,93 +134,44 @@ class WebRTCPanel(QWidget):
             "Gain for the WebRTC stream only (not local output or translation input)"
         )
         self._stream_gain_slider.valueChanged.connect(self._on_stream_gain_slider)
-        sl.addWidget(self._stream_gain_slider)
+        ctrl.addWidget(self._stream_gain_slider)
         self._stream_gain_label = QLabel("1.0×")
         self._stream_gain_label.setFixedWidth(36)
         self._stream_gain_label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        sl.addWidget(self._stream_gain_label)
+        ctrl.addWidget(self._stream_gain_label)
 
-        sl.addSpacing(8)
+        ctrl.addSpacing(8)
         self._status_label = QLabel("Idle")
         self._status_label.setObjectName("webrtcStatus")
-        sl.addWidget(self._status_label)
+        ctrl.addWidget(self._status_label)
 
-        root.addWidget(self._summary)
+        gl.addLayout(ctrl)
 
-        # Collapsible details (WHIP, token, routing, log)
-        self._content = QWidget()
-        self._content.setObjectName("webrtcContent")
-        self._content.setVisible(False)
-        cl = QVBoxLayout(self._content)
-        cl.setContentsMargins(12, 4, 12, 10)
-        cl.setSpacing(8)
-
-        # WHIP URL
-        url_row = QHBoxLayout()
-        lbl = QLabel("WHIP URL:")
-        lbl.setFixedWidth(72)
-        url_row.addWidget(lbl)
-        self._url_input = QLineEdit()
-        self._url_input.setPlaceholderText("https://server.example/whip/live")
-        self._url_input.textChanged.connect(
-            lambda t: self._cfg.set("webrtc_whip_url", t)
-        )
-        url_row.addWidget(self._url_input, 1)
-        cl.addLayout(url_row)
-
-        # Bearer token
-        token_row = QHBoxLayout()
-        lbl2 = QLabel("Token:")
-        lbl2.setFixedWidth(72)
-        token_row.addWidget(lbl2)
-        self._token_input = QLineEdit()
-        self._token_input.setPlaceholderText("Bearer token (optional)")
-        self._token_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self._token_input.textChanged.connect(
-            lambda t: self._cfg.set("webrtc_bearer_token", t)
-        )
-        token_row.addWidget(self._token_input, 1)
-
-        self._token_toggle = QPushButton("\U0001f441")  # 👁
-        self._token_toggle.setFixedWidth(32)
-        self._token_toggle.setToolTip("Show / hide token")
-        self._token_toggle.setCheckable(True)
-        self._token_toggle.toggled.connect(self._toggle_token_visibility)
-        token_row.addWidget(self._token_toggle)
-        cl.addLayout(token_row)
-
-        # Audio source
-        source_row = QHBoxLayout()
-        lbl3 = QLabel("Audio:")
-        lbl3.setFixedWidth(72)
-        source_row.addWidget(lbl3)
+        src_row = QHBoxLayout()
+        src_row.addWidget(QLabel("Audio:"))
         self._source_combo = NoScrollComboBox()
         self._source_combo.addItem("Original Audio (mic input)", "original")
         self._source_combo.addItem("Translated Audio (TTS output)", "translated")
         self._source_combo.currentIndexChanged.connect(self._on_source_changed)
-        source_row.addWidget(self._source_combo, 1)
-        cl.addLayout(source_row)
+        src_row.addWidget(self._source_combo, 1)
 
-        # Backend selection
-        backend_row = QHBoxLayout()
-        lbl4 = QLabel("Backend:")
-        lbl4.setFixedWidth(72)
-        backend_row.addWidget(lbl4)
-        self._backend_combo = NoScrollComboBox()
-        self._backend_combo.addItem("FFmpeg (low-latency)", "ffmpeg")
-        self._backend_combo.addItem("aiortc (Python WebRTC)", "aiortc")
-        self._backend_combo.currentIndexChanged.connect(self._on_backend_changed)
-        backend_row.addWidget(self._backend_combo, 1)
-        cl.addLayout(backend_row)
+        self._settings_btn = QPushButton("Settings")
+        self._settings_btn.setObjectName("webrtcSettingsButton")
+        self._settings_btn.setToolTip(
+            "WHIP URL, bearer token, and encoder backend"
+        )
+        self._settings_btn.clicked.connect(self._open_stream_settings)
+        src_row.addWidget(self._settings_btn)
 
-        # Stream log
+        gl.addLayout(src_row)
+
         self._log = _StreamLog()
-        self._log.setFixedHeight(150)
-        cl.addWidget(self._log)
+        self._log.setFixedHeight(100)
+        gl.addWidget(self._log)
 
-        root.addWidget(self._content)
+        root.addWidget(group)
 
         if not HAS_ANY_BACKEND:
             self._stream_btn.setEnabled(False)
@@ -247,71 +189,32 @@ class WebRTCPanel(QWidget):
                 "FFmpeg backend ready (low-latency)", "success",
             )
 
-    # -- signals -----------------------------------------------------------
-
     def _connect_signals(self) -> None:
-        self._toggle_btn.toggled.connect(self._on_toggle)
         self._streamer.log_message.connect(self._log.add_message)
         self._streamer.state_changed.connect(self._on_state_changed)
         self._streamer.stream_level_changed.connect(self._stream_meter.set_level)
 
-    # -- state persistence -------------------------------------------------
-
     def _restore_state(self) -> None:
         cfg = self._cfg.config
-        self._url_input.setText(cfg.webrtc_whip_url)
-        self._token_input.setText(cfg.webrtc_bearer_token)
-
         idx = self._source_combo.findData(cfg.webrtc_audio_source)
         if idx >= 0:
             self._source_combo.setCurrentIndex(idx)
-
-        bidx = self._backend_combo.findData(cfg.webrtc_backend)
-        if bidx >= 0:
-            self._backend_combo.setCurrentIndex(bidx)
-
-        exp = cfg.webrtc_panel_expanded
-        self._toggle_btn.blockSignals(True)
-        self._toggle_btn.setChecked(exp)
-        self._content.setVisible(exp)
-        self._toggle_btn.blockSignals(False)
-        arrow = "\u25bc" if exp else "\u25b6"
-        self._toggle_btn.setText(f"{arrow}  WebRTC Stream")
-        self._sync_webrtc_summary_chrome(exp)
 
         g = max(0.0, min(5.0, cfg.webrtc_stream_gain))
         self._stream_gain_slider.setValue(int(round(g * 10)))
         self._stream_gain_label.setText(f"{g:.1f}×")
         self._streamer.set_stream_gain(g)
 
-    # -- slots -------------------------------------------------------------
-
-    def _sync_webrtc_summary_chrome(self, details_open: bool) -> None:
-        self._summary.setProperty("detailsOpen", details_open)
-        self._summary.style().unpolish(self._summary)
-        self._summary.style().polish(self._summary)
-
-    def _on_toggle(self, expanded: bool) -> None:
-        self._content.setVisible(expanded)
-        self._sync_webrtc_summary_chrome(expanded)
-        arrow = "\u25bc" if expanded else "\u25b6"
-        self._toggle_btn.setText(f"{arrow}  WebRTC Stream")
-        self._cfg.set("webrtc_panel_expanded", expanded)
-
-    def _toggle_token_visibility(self, show: bool) -> None:
-        self._token_input.setEchoMode(
-            QLineEdit.EchoMode.Normal if show else QLineEdit.EchoMode.Password
-        )
+    def _open_stream_settings(self) -> None:
+        dlg = WebRTCStreamSettingsDialog(self._cfg, parent=self.window())
+        is_live = self._streamer.state in ("streaming", "connecting")
+        dlg.set_fields_enabled(not is_live)
+        dlg.exec()
 
     def _on_source_changed(self, _idx: int) -> None:
         source = self._source_combo.currentData()
         if source:
             self._cfg.set("webrtc_audio_source", source)
-
-    def _on_backend_changed(self, _idx: int) -> None:
-        backend = self._backend_combo.currentData()
-        if backend:
-            self._cfg.set("webrtc_backend", backend)
 
     def _on_stream_gain_slider(self, value: int) -> None:
         gain = max(0.0, min(5.0, value / 10.0))
@@ -324,20 +227,20 @@ class WebRTCPanel(QWidget):
             self._streamer.stop()
         else:
             source = self._source_combo.currentData() or "original"
-
             dev = self._audio_router.find_device_by_name(
                 self._cfg.config.input_device_name, DeviceDirection.INPUT
             )
             device_id = dev.device_id if dev else None
+            cfg = self._cfg.config
 
             self._streamer.start(
-                whip_url=self._url_input.text(),
-                bearer_token=self._token_input.text(),
+                whip_url=cfg.webrtc_whip_url,
+                bearer_token=cfg.webrtc_bearer_token,
                 audio_source=source,
                 input_device_id=device_id,
-                sample_rate=self._cfg.config.sample_rate,
-                stream_gain=self._cfg.config.webrtc_stream_gain,
-                preferred_backend=self._backend_combo.currentData() or "ffmpeg",
+                sample_rate=cfg.sample_rate,
+                stream_gain=cfg.webrtc_stream_gain,
+                preferred_backend=cfg.webrtc_backend or "ffmpeg",
             )
 
     @pyqtSlot(str)
@@ -357,7 +260,5 @@ class WebRTCPanel(QWidget):
         self._stream_btn.style().unpolish(self._stream_btn)
         self._stream_btn.style().polish(self._stream_btn)
 
-        self._url_input.setEnabled(not is_active)
-        self._token_input.setEnabled(not is_active)
         self._source_combo.setEnabled(not is_active)
-        self._backend_combo.setEnabled(not is_active)
+        self._settings_btn.setEnabled(not is_active)

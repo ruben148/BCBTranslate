@@ -2,26 +2,42 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor
-from PyQt6.QtWidgets import QTextEdit, QVBoxLayout, QWidget
+from PyQt6.QtCore import pyqtSlot
+from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
+from PyQt6.QtWidgets import QSizePolicy, QTextEdit, QVBoxLayout, QWidget
 
 
 class LogPanel(QWidget):
     """Scrollable, color-coded translation log."""
 
     MAX_BLOCKS = 2000  # max lines before pruning
+    _LOG_FONT_PT = 10
+    # Minimum text area height; grows when the window is taller
+    VIEWPORT_MIN_HEIGHT = 132
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         self._text = QTextEdit()
         self._text.setReadOnly(True)
         self._text.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-        self._text.setFont(self._text.font())
-        layout.addWidget(self._text)
+        _lf = QFont(self._text.font())
+        _lf.setPointSize(self._LOG_FONT_PT)
+        self._text.setFont(_lf)
+        self._text.setMinimumHeight(self.VIEWPORT_MIN_HEIGHT)
+        self._text.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        layout.addWidget(self._text, 1)
+
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
 
         self._has_partial = False
 

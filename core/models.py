@@ -139,8 +139,7 @@ class AppConfig:
     hotkey_start_stop: str = "Ctrl+Shift+T"
     show_vu_meter: bool = True
     audio_devices_expanded: bool = False
-    segmentation_panel_expanded: bool = False
-    voice_tuning_panel_expanded: bool = False
+    translation_section_expanded: bool = False
 
     # Logging
     log_to_file: bool = False
@@ -165,6 +164,5 @@ class AppConfig:
     webrtc_bearer_token: str = ""
     webrtc_audio_source: str = "original"
     webrtc_backend: str = "ffmpeg"  # "ffmpeg" or "aiortc"
-    webrtc_panel_expanded: bool = False
     # Gain applied only to PCM sent to the WebRTC encoder (not Azure or speakers).
     webrtc_stream_gain: float = 1.0

@@ -14,6 +14,8 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -79,7 +81,7 @@ class MainWindow(QMainWindow):
         if icon.exists():
             self.setWindowIcon(QIcon(str(icon)))
         self.setMinimumSize(680, 600)
-        self.resize(740, 780)
+        self.resize(740, 820)
 
         self._audio_router.gain = self._cfg.config.input_gain
 
@@ -134,7 +136,7 @@ class MainWindow(QMainWindow):
         root.setSpacing(8)
         root.setContentsMargins(14, 14, 14, 14)
 
-        # ── Control panels (no outer scroll — sections stay visible) ─────
+        # ── Control panels ─────────────────────────────────────────────────
         controls_panel = QWidget()
         controls_layout = QVBoxLayout(controls_panel)
         controls_layout.setSpacing(8)
@@ -213,46 +215,51 @@ class MainWindow(QMainWindow):
 
         controls_layout.addWidget(audio_group)
 
-        # ── Translation section ──────────────────────────────────────────
-        trans_group = QGroupBox("Translation")
-        trans_layout = QHBoxLayout(trans_group)
+        # ── Translation (Language + Segmentation + Voice tuning, expandable) ─
+        translation_outer = QWidget()
+        translation_outer_layout = QVBoxLayout(translation_outer)
+        translation_outer_layout.setContentsMargins(0, 0, 0, 0)
 
-        trans_layout.addWidget(QLabel("From:"))
+        self._translation_section_toggle = QPushButton()
+        self._translation_section_toggle.setObjectName("panelSectionToggle")
+        self._translation_section_toggle.setCheckable(True)
+        self._translation_section_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._translation_section_toggle.toggled.connect(
+            self._on_translation_section_toggle
+        )
+        translation_outer_layout.addWidget(self._translation_section_toggle)
+
+        self._translation_section_content = QWidget()
+        ts_inner = QVBoxLayout(self._translation_section_content)
+        ts_inner.setContentsMargins(12, 0, 12, 8)
+        ts_inner.setSpacing(8)
+
+        lang_group = QGroupBox("Language")
+        lang_layout = QHBoxLayout(lang_group)
+
+        lang_layout.addWidget(QLabel("From:"))
         self._source_label = QLabel(self._cfg.config.source_language)
         self._source_label.setStyleSheet("font-weight: bold;")
-        trans_layout.addWidget(self._source_label)
+        lang_layout.addWidget(self._source_label)
 
-        trans_layout.addWidget(QLabel("→"))
+        lang_layout.addWidget(QLabel("→"))
 
-        trans_layout.addWidget(QLabel("To:"))
+        lang_layout.addWidget(QLabel("To:"))
         self._target_label = QLabel(self._cfg.config.target_language)
         self._target_label.setStyleSheet("font-weight: bold;")
-        trans_layout.addWidget(self._target_label)
+        lang_layout.addWidget(self._target_label)
 
-        trans_layout.addStretch()
+        lang_layout.addStretch()
 
-        trans_layout.addWidget(QLabel("Voice:"))
+        lang_layout.addWidget(QLabel("Voice:"))
         self._voice_label = QLabel(self._cfg.config.voice_name)
         self._voice_label.setStyleSheet("font-weight: bold;")
-        trans_layout.addWidget(self._voice_label)
+        lang_layout.addWidget(self._voice_label)
 
-        controls_layout.addWidget(trans_group)
+        ts_inner.addWidget(lang_group)
 
-        # ── Segmentation section (collapsed by default) ──────────────────
-        seg_section = QWidget()
-        seg_outer = QVBoxLayout(seg_section)
-        seg_outer.setContentsMargins(0, 0, 0, 0)
-
-        self._seg_toggle = QPushButton()
-        self._seg_toggle.setObjectName("panelSectionToggle")
-        self._seg_toggle.setCheckable(True)
-        self._seg_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._seg_toggle.toggled.connect(self._on_segmentation_panel_toggle)
-        seg_outer.addWidget(self._seg_toggle)
-
-        self._seg_content = QWidget()
-        seg_layout = QVBoxLayout(self._seg_content)
-        seg_layout.setContentsMargins(12, 0, 12, 8)
+        seg_group = QGroupBox("Segmentation")
+        seg_layout = QVBoxLayout(seg_group)
 
         silence_row = QHBoxLayout()
         silence_row.addWidget(QLabel("Silence:"))
@@ -305,32 +312,10 @@ class MainWindow(QMainWindow):
         thresh_row.addWidget(self._auto_seg_max_spin)
         seg_layout.addLayout(thresh_row)
 
-        seg_outer.addWidget(self._seg_content)
+        ts_inner.addWidget(seg_group)
 
-        seg_exp = self._cfg.config.segmentation_panel_expanded
-        self._seg_content.setVisible(seg_exp)
-        self._seg_toggle.blockSignals(True)
-        self._seg_toggle.setChecked(seg_exp)
-        self._seg_toggle.blockSignals(False)
-        self._refresh_segmentation_toggle_label()
-
-        controls_layout.addWidget(seg_section)
-
-        # ── Voice Tuning (collapsed by default) ───────────────────────────
-        tuning_section = QWidget()
-        tune_outer = QVBoxLayout(tuning_section)
-        tune_outer.setContentsMargins(0, 0, 0, 0)
-
-        self._voice_toggle = QPushButton()
-        self._voice_toggle.setObjectName("panelSectionToggle")
-        self._voice_toggle.setCheckable(True)
-        self._voice_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._voice_toggle.toggled.connect(self._on_voice_tuning_panel_toggle)
-        tune_outer.addWidget(self._voice_toggle)
-
-        self._voice_content = QWidget()
-        tuning_layout = QVBoxLayout(self._voice_content)
-        tuning_layout.setContentsMargins(12, 0, 12, 8)
+        tune_group = QGroupBox("Voice Tuning")
+        tuning_layout = QVBoxLayout(tune_group)
 
         speed_row = QHBoxLayout()
         speed_row.addWidget(QLabel("Speed:"))
@@ -358,18 +343,18 @@ class MainWindow(QMainWindow):
         pitch_row.addWidget(self._pitch_label)
         tuning_layout.addLayout(pitch_row)
 
-        tune_outer.addWidget(self._voice_content)
+        ts_inner.addWidget(tune_group)
 
-        vt_exp = self._cfg.config.voice_tuning_panel_expanded
-        self._voice_content.setVisible(vt_exp)
-        self._voice_toggle.blockSignals(True)
-        self._voice_toggle.setChecked(vt_exp)
-        self._voice_toggle.blockSignals(False)
-        self._refresh_voice_tuning_toggle_label()
+        translation_outer_layout.addWidget(self._translation_section_content)
 
-        controls_layout.addWidget(tuning_section)
+        ts_exp = self._cfg.config.translation_section_expanded
+        self._translation_section_content.setVisible(ts_exp)
+        self._translation_section_toggle.blockSignals(True)
+        self._translation_section_toggle.setChecked(ts_exp)
+        self._translation_section_toggle.blockSignals(False)
+        self._refresh_translation_section_toggle_label()
 
-        root.addWidget(controls_panel, 0)
+        controls_layout.addWidget(translation_outer)
 
         # ── Status section ───────────────────────────────────────────────
         status_group = QGroupBox("Status")
@@ -403,23 +388,46 @@ class MainWindow(QMainWindow):
         settings_btn.clicked.connect(self.open_settings)
         status_layout.addWidget(settings_btn)
 
-        root.addWidget(status_group)
-
-        # ── Log panel (fixed vertical budget so controls stay on screen) ─
+        # ── Log panel ────────────────────────────────────────────────────
         log_group = QGroupBox("Live Log")
+        log_group.setObjectName("liveLogGroup")
+        log_group.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Expanding,
+        )
         log_layout = QVBoxLayout(log_group)
+        log_layout.setContentsMargins(0, 0, 0, 0)
+        log_layout.setSpacing(0)
         self._log_panel = LogPanel()
-        log_layout.addWidget(self._log_panel)
-        log_group.setMinimumHeight(120)
-        log_group.setMaximumHeight(240)
-        root.addWidget(log_group, 0)
+        log_layout.addWidget(self._log_panel, 1)
 
-        # ── WebRTC Stream panel (bottom; details expandable) ────────────
+        # ── WebRTC Stream panel ───────────────────────────────────────────
         self._webrtc_panel = WebRTCPanel(
             self._webrtc_streamer, self._cfg, self._audio_router, parent=self
         )
-        root.addWidget(self._webrtc_panel, 0)
-        root.addStretch(1)
+
+        # One scrollable page: natural control heights; scrollbars when needed
+        scroll_inner = QWidget()
+        scroll_layout = QVBoxLayout(scroll_inner)
+        scroll_layout.setSpacing(8)
+        scroll_layout.setContentsMargins(0, 0, 4, 0)
+        scroll_layout.addWidget(controls_panel, 0)
+        scroll_layout.addWidget(status_group, 0)
+        scroll_layout.addWidget(log_group, 1)
+        scroll_layout.addWidget(self._webrtc_panel, 0)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        scroll_area.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        scroll_area.setWidget(scroll_inner)
+
+        root.addWidget(scroll_area, 1)
 
         # ── Status bar ───────────────────────────────────────────────────
         self._status_bar = QStatusBar()
@@ -498,32 +506,22 @@ class MainWindow(QMainWindow):
     def _refresh_audio_devices_toggle_label(self) -> None:
         on = self._audio_devices_toggle.isChecked()
         arrow = "\u25bc" if on else "\u25b6"
-        self._audio_devices_toggle.setText(f"{arrow}  Input & output settings")
+        self._audio_devices_toggle.setText(f"{arrow}  Input/output settings")
 
     def _on_audio_devices_toggle(self, expanded: bool) -> None:
         self._audio_devices_widget.setVisible(expanded)
         self._cfg.set("audio_devices_expanded", expanded)
         self._refresh_audio_devices_toggle_label()
 
-    def _refresh_segmentation_toggle_label(self) -> None:
-        on = self._seg_toggle.isChecked()
+    def _refresh_translation_section_toggle_label(self) -> None:
+        on = self._translation_section_toggle.isChecked()
         arrow = "\u25bc" if on else "\u25b6"
-        self._seg_toggle.setText(f"{arrow}  Segmentation")
+        self._translation_section_toggle.setText(f"{arrow}  Translation")
 
-    def _on_segmentation_panel_toggle(self, expanded: bool) -> None:
-        self._seg_content.setVisible(expanded)
-        self._cfg.set("segmentation_panel_expanded", expanded)
-        self._refresh_segmentation_toggle_label()
-
-    def _refresh_voice_tuning_toggle_label(self) -> None:
-        on = self._voice_toggle.isChecked()
-        arrow = "\u25bc" if on else "\u25b6"
-        self._voice_toggle.setText(f"{arrow}  Voice Tuning")
-
-    def _on_voice_tuning_panel_toggle(self, expanded: bool) -> None:
-        self._voice_content.setVisible(expanded)
-        self._cfg.set("voice_tuning_panel_expanded", expanded)
-        self._refresh_voice_tuning_toggle_label()
+    def _on_translation_section_toggle(self, expanded: bool) -> None:
+        self._translation_section_content.setVisible(expanded)
+        self._cfg.set("translation_section_expanded", expanded)
+        self._refresh_translation_section_toggle_label()
 
     # -- segmentation controls -----------------------------------------------
 

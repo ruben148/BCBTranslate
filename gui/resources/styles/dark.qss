@@ -28,6 +28,12 @@ QGroupBox::title {
     color: #89b4fa;
 }
 
+/* Tighter chrome so the frame matches the log viewport */
+QGroupBox#liveLogGroup {
+    margin-top: 8px;
+    padding: 8px 8px 8px 8px;
+}
+
 /* Labels */
 QLabel {
     background: transparent;
@@ -273,8 +279,8 @@ QToolTip {
     color: #cdd6f4;
 }
 
-/* WebRTC panel + collapsible main-window sections */
-QPushButton#webrtcToggle, QPushButton#panelSectionToggle {
+/* Collapsible main-window sections */
+QPushButton#panelSectionToggle {
     background-color: #313244;
     border: 1px solid #45475a;
     border-radius: 8px;
@@ -285,36 +291,31 @@ QPushButton#webrtcToggle, QPushButton#panelSectionToggle {
     text-align: left;
 }
 
-QPushButton#webrtcToggle:hover, QPushButton#panelSectionToggle:hover {
+QPushButton#panelSectionToggle:hover {
     background-color: #45475a;
     border-color: #89b4fa;
 }
 
-QPushButton#webrtcToggle:checked, QPushButton#panelSectionToggle:checked {
+QPushButton#panelSectionToggle:checked {
     color: #89b4fa;
 }
 
-QWidget#webrtcSummary {
-    background-color: #313244;
-    border-left: 1px solid #45475a;
-    border-right: 1px solid #45475a;
-    border-bottom: 1px solid #45475a;
-    border-bottom-left-radius: 8px;
-    border-bottom-right-radius: 8px;
-}
-
-QWidget#webrtcSummary[detailsOpen="true"] {
-    border-bottom: none;
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
-}
-
-QWidget#webrtcContent {
+QPushButton#webrtcSettingsButton {
     background-color: #313244;
     border: 1px solid #45475a;
-    border-top: none;
-    border-bottom-left-radius: 8px;
-    border-bottom-right-radius: 8px;
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: #cdd6f4;
+}
+
+QPushButton#webrtcSettingsButton:hover {
+    background-color: #45475a;
+    border-color: #89b4fa;
+}
+
+QPushButton#webrtcSettingsButton:disabled {
+    color: #6c7086;
+    border-color: #45475a;
 }
 
 QPushButton#webrtcStreamButton {
