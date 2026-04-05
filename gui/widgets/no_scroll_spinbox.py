@@ -1,4 +1,11 @@
-from PyQt6.QtWidgets import QDoubleSpinBox, QSlider, QSpinBox
+from PyQt6.QtWidgets import QComboBox, QDoubleSpinBox, QSlider, QSpinBox
+
+
+class NoScrollComboBox(QComboBox):
+    """QComboBox that never changes selection via the scroll wheel."""
+
+    def wheelEvent(self, event):
+        event.ignore()
 
 
 class NoScrollSpinBox(QSpinBox):

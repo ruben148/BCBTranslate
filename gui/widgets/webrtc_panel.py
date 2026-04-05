@@ -7,7 +7,6 @@ from datetime import datetime
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
-    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -21,7 +20,7 @@ from core.audio_router import AudioRouter
 from core.config_manager import ConfigManager
 from core.models import DeviceDirection
 from core.webrtc_streamer import HAS_ANY_BACKEND, HAS_FFMPEG_WHIP, WebRTCStreamer
-from gui.widgets.no_scroll_spinbox import NoScrollSlider
+from gui.widgets.no_scroll_spinbox import NoScrollComboBox, NoScrollSlider
 from gui.widgets.vu_meter import VUMeter
 
 
@@ -165,7 +164,7 @@ class WebRTCPanel(QWidget):
         lbl3 = QLabel("Audio:")
         lbl3.setFixedWidth(72)
         source_row.addWidget(lbl3)
-        self._source_combo = QComboBox()
+        self._source_combo = NoScrollComboBox()
         self._source_combo.addItem("Original Audio (mic input)", "original")
         self._source_combo.addItem("Translated Audio (TTS output)", "translated")
         self._source_combo.currentIndexChanged.connect(self._on_source_changed)
@@ -177,7 +176,7 @@ class WebRTCPanel(QWidget):
         lbl4 = QLabel("Backend:")
         lbl4.setFixedWidth(72)
         backend_row.addWidget(lbl4)
-        self._backend_combo = QComboBox()
+        self._backend_combo = NoScrollComboBox()
         self._backend_combo.addItem("FFmpeg (low-latency)", "ffmpeg")
         self._backend_combo.addItem("aiortc (Python WebRTC)", "aiortc")
         self._backend_combo.currentIndexChanged.connect(self._on_backend_changed)
