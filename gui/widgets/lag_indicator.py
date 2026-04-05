@@ -22,7 +22,7 @@ class _DotWidget(QWidget):
         self._active = 0
         self._total = 5
         self._color = QColor(76, 175, 80)
-        self.setFixedSize(80, 18)
+        self.setFixedSize(72, 16)
 
     def set_state(self, active: int, color: QColor) -> None:
         self._active = active
@@ -32,9 +32,9 @@ class _DotWidget(QWidget):
     def paintEvent(self, event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        dot_r = 6
-        spacing = 14
-        x_start = 4
+        dot_r = 5
+        spacing = 12
+        x_start = 3
         y_center = self.height() // 2
 
         for i in range(self._total):

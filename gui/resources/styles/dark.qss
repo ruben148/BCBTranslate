@@ -34,6 +34,22 @@ QGroupBox#liveLogGroup {
     padding: 8px 8px 8px 8px;
 }
 
+QGroupBox#statusGroup {
+    margin-top: 8px;
+    padding: 6px 8px 6px 8px;
+}
+
+QGroupBox#statusGroup QPushButton#startButton {
+    font-size: 13px;
+    padding: 6px 22px;
+    border-radius: 6px;
+}
+
+QGroupBox#statusGroup QPushButton {
+    padding: 5px 12px;
+    min-height: 20px;
+}
+
 /* Labels */
 QLabel {
     background: transparent;

@@ -358,12 +358,15 @@ class MainWindow(QMainWindow):
 
         # ── Status section ───────────────────────────────────────────────
         status_group = QGroupBox("Status")
+        status_group.setObjectName("statusGroup")
         status_layout = QHBoxLayout(status_group)
+        status_layout.setContentsMargins(6, 4, 6, 4)
+        status_layout.setSpacing(6)
 
         self._lag_indicator = LagIndicator()
         status_layout.addWidget(self._lag_indicator)
 
-        status_layout.addSpacing(16)
+        status_layout.addSpacing(10)
 
         self._queue_label = QLabel("Queue: 0")
         status_layout.addWidget(self._queue_label)
