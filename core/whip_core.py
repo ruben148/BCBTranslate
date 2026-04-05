@@ -19,9 +19,16 @@ logger = logging.getLogger(__name__)
 
 
 class _ThreadingWhipHTTPServer(ThreadingMixIn, http.server.HTTPServer):
-    """WHIP signaling may use concurrent HTTP (e.g. trickle ICE PATCH + reads)."""
+    """WHIP signaling may use concurrent HTTP (e.g. trickle ICE PATCH + reads).
 
-    daemon_threads = True
+    Handler threads must be *non-daemon* so ``server_close()`` joins them
+    (``ThreadingMixIn._Threads`` skips daemon threads). Otherwise a fast
+    stop/start can tear down the listening socket while a POST/PATCH to the
+    real WHIP endpoint is still running, overlapping sessions and breaking
+    the next DTLS handshake.
+    """
+
+    daemon_threads = False
     allow_reuse_address = True
 
 

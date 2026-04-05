@@ -21,6 +21,8 @@ from core.audio_router import AudioRouter
 from core.config_manager import ConfigManager
 from core.models import DeviceDirection
 from core.webrtc_streamer import HAS_ANY_BACKEND, HAS_FFMPEG_WHIP, WebRTCStreamer
+from gui.widgets.no_scroll_spinbox import NoScrollSlider
+from gui.widgets.vu_meter import VUMeter
 
 
 class _StreamLog(QWidget):
@@ -182,6 +184,30 @@ class WebRTCPanel(QWidget):
         backend_row.addWidget(self._backend_combo, 1)
         cl.addLayout(backend_row)
 
+        # Stream output level (post-gain) and gain — does not affect speakers or Azure.
+        stream_row = QHBoxLayout()
+        lbl5 = QLabel("Stream:")
+        lbl5.setFixedWidth(72)
+        stream_row.addWidget(lbl5)
+        self._stream_meter = VUMeter()
+        self._stream_meter.setMinimumHeight(12)
+        self._stream_meter.setMaximumHeight(16)
+        self._stream_meter.setMinimumWidth(100)
+        stream_row.addWidget(self._stream_meter, 1)
+        self._stream_gain_slider = NoScrollSlider(Qt.Orientation.Horizontal)
+        self._stream_gain_slider.setRange(0, 50)
+        self._stream_gain_slider.setFixedWidth(120)
+        self._stream_gain_slider.setToolTip(
+            "Gain for the WebRTC stream only (not local output or translation input)"
+        )
+        self._stream_gain_slider.valueChanged.connect(self._on_stream_gain_slider)
+        stream_row.addWidget(self._stream_gain_slider)
+        self._stream_gain_label = QLabel("1.0×")
+        self._stream_gain_label.setFixedWidth(36)
+        self._stream_gain_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        stream_row.addWidget(self._stream_gain_label)
+        cl.addLayout(stream_row)
+
         # Controls row
         ctrl_row = QHBoxLayout()
         self._stream_btn = QPushButton("START STREAM")
@@ -224,6 +250,7 @@ class WebRTCPanel(QWidget):
         self._toggle_btn.toggled.connect(self._on_toggle)
         self._streamer.log_message.connect(self._log.add_message)
         self._streamer.state_changed.connect(self._on_state_changed)
+        self._streamer.stream_level_changed.connect(self._stream_meter.set_level)
 
     # -- state persistence -------------------------------------------------
 
@@ -242,6 +269,11 @@ class WebRTCPanel(QWidget):
 
         if cfg.webrtc_panel_expanded:
             self._toggle_btn.setChecked(True)
+
+        g = max(0.0, min(5.0, cfg.webrtc_stream_gain))
+        self._stream_gain_slider.setValue(int(round(g * 10)))
+        self._stream_gain_label.setText(f"{g:.1f}×")
+        self._streamer.set_stream_gain(g)
 
     # -- slots -------------------------------------------------------------
 
@@ -266,6 +298,12 @@ class WebRTCPanel(QWidget):
         if backend:
             self._cfg.set("webrtc_backend", backend)
 
+    def _on_stream_gain_slider(self, value: int) -> None:
+        gain = max(0.0, min(5.0, value / 10.0))
+        self._stream_gain_label.setText(f"{gain:.1f}×")
+        self._cfg.set("webrtc_stream_gain", gain)
+        self._streamer.set_stream_gain(gain)
+
     def _toggle_stream(self) -> None:
         if self._streamer.state in ("streaming", "connecting"):
             self._streamer.stop()
@@ -283,7 +321,7 @@ class WebRTCPanel(QWidget):
                 audio_source=source,
                 input_device_id=device_id,
                 sample_rate=self._cfg.config.sample_rate,
-                gain=self._cfg.config.input_gain,
+                stream_gain=self._cfg.config.webrtc_stream_gain,
                 preferred_backend=self._backend_combo.currentData() or "ffmpeg",
             )
 

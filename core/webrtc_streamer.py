@@ -42,6 +42,13 @@ logger = logging.getLogger(__name__)
 
 _CREATIONFLAGS = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
 
+# Brief pause before opening a new WHIP session after the last one was torn down
+# (helps peers that release ICE/DTLS slightly behind our HTTP signaling).
+_WHIP_RECONNECT_SETTLE_SEC = 0.25
+
+# Max rate for forwarding RMS into the WebRTC stream VU meter (audio thread).
+_STREAM_LEVEL_EMIT_INTERVAL_SEC = 0.05
+
 try:
     from aiortc import (
         MediaStreamTrack,
@@ -209,6 +216,7 @@ class WebRTCStreamer(QObject):
 
     log_message = pyqtSignal(str, str)
     state_changed = pyqtSignal(str)
+    stream_level_changed = pyqtSignal(float)
 
     def __init__(self, audio_router, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -237,6 +245,46 @@ class WebRTCStreamer(QObject):
         self._track: AudioBufferTrack | None = None
         self._whip_resource_url: str | None = None
         self._whip_bearer_token: str = ""
+        self._whip_earliest_reconnect_mono: float = 0.0
+
+        # WebRTC-only gain + VU (see WebRTCPanel stream meter).
+        self._stream_gain: float = 1.0
+        self._stream_level_last_emit: float = 0.0
+
+    def set_stream_gain(self, gain: float) -> None:
+        """Apply multiplier to audio sent on the WHIP stream only (0…5×)."""
+        self._stream_gain = max(0.0, min(5.0, float(gain)))
+
+    def _emit_stream_level_rms(self, rms: float) -> None:
+        if self._closing:
+            return
+        now = time.monotonic()
+        if now - self._stream_level_last_emit < _STREAM_LEVEL_EMIT_INTERVAL_SEC:
+            return
+        self._stream_level_last_emit = now
+        try:
+            self.stream_level_changed.emit(rms)
+        except RuntimeError:
+            pass
+
+    def _reset_stream_level_meter(self) -> None:
+        self._stream_level_last_emit = 0.0
+        if self._closing:
+            return
+        try:
+            self.stream_level_changed.emit(0.0)
+        except RuntimeError:
+            pass
+
+    def _mark_whip_reconnect_settle(self) -> None:
+        self._whip_earliest_reconnect_mono = (
+            time.monotonic() + _WHIP_RECONNECT_SETTLE_SEC
+        )
+
+    def _wait_whip_reconnect_settle(self) -> None:
+        rem = self._whip_earliest_reconnect_mono - time.monotonic()
+        if rem > 0:
+            time.sleep(rem)
 
     @property
     def state(self) -> str:
@@ -258,6 +306,7 @@ class WebRTCStreamer(QObject):
         input_device_id: int | None = None,
         sample_rate: int = 16000,
         gain: float = 1.0,
+        stream_gain: float = 1.0,
         preferred_backend: str = "ffmpeg",
     ) -> None:
         if self._state not in ("idle", "error"):
@@ -271,6 +320,7 @@ class WebRTCStreamer(QObject):
             preferred_backend = "ffmpeg"
 
         self._closing = False
+        self.set_stream_gain(stream_gain)
         self._cleanup_all()
         self._set_state("connecting")
 
@@ -321,6 +371,7 @@ class WebRTCStreamer(QObject):
         finally:
             self._backend = None
             self._set_state("idle")
+            self._reset_stream_level_meter()
             self._emit_log("Stream stopped", "info")
 
     def shutdown(self) -> None:
@@ -354,6 +405,8 @@ class WebRTCStreamer(QObject):
         gain: float,
     ) -> None:
         capture_rate = 48000 if audio_source == "original" else sample_rate
+
+        self._wait_whip_reconnect_settle()
 
         self._whip_proxy = WHIPProxy(url, token)
         proxy_port = self._whip_proxy.start()
@@ -472,6 +525,7 @@ class WebRTCStreamer(QObject):
             except Exception:
                 pass
             self._whip_proxy = None
+            self._mark_whip_reconnect_settle()
 
     def _ffmpeg_writer(self) -> None:
         """Drain the write queue into FFmpeg's stdin (dedicated thread)."""
@@ -558,8 +612,11 @@ class WebRTCStreamer(QObject):
                 wq = self._write_queue
                 if wq is None:
                     return
-                amplified = indata[:, 0] * gain * 32767
-                pcm = np.clip(amplified, -32768, 32767).astype(np.int16)
+                ch = indata[:, 0].astype(np.float64)
+                scaled = ch * gain * self._stream_gain
+                rms = float(np.sqrt(np.mean(scaled * scaled))) if scaled.size else 0.0
+                self._emit_stream_level_rms(rms)
+                pcm = np.clip(scaled * 32767.0, -32768, 32767).astype(np.int16)
                 stereo = np.repeat(pcm, 2)
                 wq.put_nowait(stereo.tobytes())
             except Exception:
@@ -591,8 +648,18 @@ class WebRTCStreamer(QObject):
                 if wq is None:
                     break
                 frame = adapter.pop_stereo_s16le_frame()
+                arr = np.frombuffer(frame, dtype=np.int16).reshape(-1, 2)
+                scaled = np.clip(
+                    arr.astype(np.float32) * self._stream_gain,
+                    -32768.0,
+                    32767.0,
+                ).astype(np.int16)
+                mono_f = scaled[:, 0].astype(np.float64) / 32768.0
+                rms = float(np.sqrt(np.mean(mono_f * mono_f))) if mono_f.size else 0.0
+                self._emit_stream_level_rms(rms)
+                out = scaled.reshape(-1).tobytes()
                 try:
-                    wq.put_nowait(frame)
+                    wq.put_nowait(out)
                 except queue.Full:
                     pass
 
@@ -759,8 +826,11 @@ class WebRTCStreamer(QObject):
                 track = self._track
                 if track is None:
                     return
-                amplified = indata[:, 0] * gain * 32767
-                pcm = np.clip(amplified, -32768, 32767).astype(np.int16)
+                ch = indata[:, 0].astype(np.float64)
+                scaled = ch * gain * self._stream_gain
+                rms = float(np.sqrt(np.mean(scaled * scaled))) if scaled.size else 0.0
+                self._emit_stream_level_rms(rms)
+                pcm = np.clip(scaled * 32767.0, -32768, 32767).astype(np.int16)
                 track.push_audio(pcm, source_rate=rate)
             except Exception:
                 pass
@@ -775,7 +845,12 @@ class WebRTCStreamer(QObject):
                 track = self._track
                 if track is None:
                     return
-                pcm = np.frombuffer(pcm_data, dtype=np.int16)
+                raw = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32)
+                scaled = np.clip(raw * self._stream_gain, -32768.0, 32767.0)
+                mono_f = scaled.astype(np.float64) / 32768.0
+                rms = float(np.sqrt(np.mean(mono_f * mono_f))) if mono_f.size else 0.0
+                self._emit_stream_level_rms(rms)
+                pcm = scaled.astype(np.int16)
                 track.push_audio(pcm, source_rate=sample_rate)
             except Exception:
                 pass
@@ -850,6 +925,7 @@ class WebRTCStreamer(QObject):
             except Exception:
                 pass
             self._whip_proxy = None
+            self._mark_whip_reconnect_settle()
 
         # aiortc
         if self._loop and self._loop.is_running():

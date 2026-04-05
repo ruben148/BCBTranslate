@@ -163,3 +163,5 @@ class AppConfig:
     webrtc_audio_source: str = "original"
     webrtc_backend: str = "ffmpeg"  # "ffmpeg" or "aiortc"
     webrtc_panel_expanded: bool = False
+    # Gain applied only to PCM sent to the WebRTC encoder (not Azure or speakers).
+    webrtc_stream_gain: float = 1.0
