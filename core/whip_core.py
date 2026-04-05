@@ -10,11 +10,19 @@ import ipaddress
 import logging
 import socket
 import threading
+from socketserver import ThreadingMixIn
 import urllib.error
 import urllib.request
 from urllib.parse import urljoin
 
 logger = logging.getLogger(__name__)
+
+
+class _ThreadingWhipHTTPServer(ThreadingMixIn, http.server.HTTPServer):
+    """WHIP signaling may use concurrent HTTP (e.g. trickle ICE PATCH + reads)."""
+
+    daemon_threads = True
+    allow_reuse_address = True
 
 
 def is_ip_address(addr: str) -> bool:
@@ -119,6 +127,7 @@ def whip_post_offer(url: str, sdp: str, token: str) -> tuple[str, str | None]:
     req = urllib.request.Request(
         url, data=sdp.encode("utf-8"), headers=headers, method="POST",
     )
+    req.add_header("Connection", "close")
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             answer = resp.read().decode("utf-8")
@@ -137,6 +146,7 @@ def whip_post_offer(url: str, sdp: str, token: str) -> tuple[str, str | None]:
 
 def whip_delete_resource(url: str, token: str) -> None:
     req = urllib.request.Request(url, method="DELETE")
+    req.add_header("Connection", "close")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     try:
@@ -176,6 +186,7 @@ class WHIPProxy:
                         proxy._target_url, data=body,
                         headers=headers, method="POST",
                     )
+                    req.add_header("Connection", "close")
                     with urllib.request.urlopen(req, timeout=15) as resp:
                         answer_sdp = resp.read().decode("utf-8")
                         location = resp.headers.get("Location")
@@ -222,6 +233,7 @@ class WHIPProxy:
                     return
                 try:
                     req = urllib.request.Request(url, method="DELETE")
+                    req.add_header("Connection", "close")
                     if proxy._bearer_token:
                         req.add_header(
                             "Authorization",
@@ -250,6 +262,7 @@ class WHIPProxy:
                         url, data=body,
                         headers={"Content-Type": ct}, method="PATCH",
                     )
+                    req.add_header("Connection", "close")
                     if proxy._bearer_token:
                         req.add_header(
                             "Authorization",
@@ -264,7 +277,7 @@ class WHIPProxy:
                     self.send_response(502)
                     self.end_headers()
 
-        self._server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self._server = _ThreadingWhipHTTPServer(("127.0.0.1", 0), Handler)
         port = self._server.server_address[1]
         self._thread = threading.Thread(
             target=self._server.serve_forever, daemon=True, name="whip-proxy",
@@ -283,6 +296,10 @@ class WHIPProxy:
     def stop(self) -> None:
         if self._server:
             self._server.shutdown()
+            try:
+                self._server.server_close()
+            except Exception:
+                pass
             self._server = None
         if self._thread:
             self._thread.join(timeout=3)

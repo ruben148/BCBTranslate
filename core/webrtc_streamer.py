@@ -447,11 +447,14 @@ class WebRTCStreamer(QObject):
                     pass
             except Exception:
                 pass
-            self._process = None
 
+        # Clear stdin writer / stderr only after the process is gone so readers
+        # still see self._process is the Popen they started with (avoids applying
+        # exit codes or "streaming" lines to a newer FFmpeg after stop/start).
         for t in (self._writer_thread, self._stderr_thread):
             if t is not None and t.is_alive():
                 t.join(timeout=3)
+        self._process = None
         self._write_queue = None
         if self._translated_feeder_thread is not None and self._translated_feeder_thread.is_alive():
             self._translated_feeder_thread.join(timeout=3)
@@ -506,10 +509,12 @@ class WebRTCStreamer(QObject):
                 lower = text.lower()
 
                 if "error" in lower or "failed" in lower or "invalid" in lower:
-                    self._emit_log(text, "error")
+                    if self._process is proc:
+                        self._emit_log(text, "error")
                     error_seen = True
                 elif (
-                    not connected_reported
+                    self._process is proc
+                    and not connected_reported
                     and not error_seen
                     and ("speed=" in lower or "size=" in lower)
                 ):
@@ -517,11 +522,15 @@ class WebRTCStreamer(QObject):
                     self._set_state("streaming")
                     self._emit_log("Streaming audio", "success")
                 elif any(k in lower for k in ("whip", "ice", "dtls")):
-                    self._emit_log(text, "info")
+                    if self._process is proc:
+                        self._emit_log(text, "info")
                 elif "stream mapping" in lower or "output #" in lower:
-                    self._emit_log(text, "info")
+                    if self._process is proc:
+                        self._emit_log(text, "info")
         except Exception:
             pass
+        if self._process is not proc:
+            return
         rc = proc.poll()
         if rc and rc != 0 and self._state not in ("idle", "stopping"):
             self._set_state("error")
@@ -823,11 +832,11 @@ class WebRTCStreamer(QObject):
                         pass
                 except Exception:
                     pass
-        self._process = None
         self._write_queue = None
         for t in (self._writer_thread, self._stderr_thread, self._translated_feeder_thread):
             if t is not None and t.is_alive():
                 t.join(timeout=2)
+        self._process = None
         self._writer_thread = None
         self._stderr_thread = None
         self._translated_feeder_thread = None

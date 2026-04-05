@@ -10,18 +10,20 @@ The application must be simple to use, fully configurable, resilient to real-wor
 
 ## 2. Problems with the Current Prototypes
 
-| # | Problem | Impact |
-|---|---------|--------|
-| 1 | Hard-coded to OS default microphone/speaker — no device selection | Cannot target a specific Midas channel or virtual cable without changing Windows defaults every time |
-| 2 | No speed or pitch control on TTS output | If the speaker talks fast, the translated English audio falls behind and sounds unnatural |
-| 3 | No virtual audio output routing | Cannot feed translated audio into Teams as a "microphone" source |
-| 4 | No persistent configuration | Every parameter must be changed in code and restarted |
-| 5 | No lag/latency indicator | Operator has no idea if translation is falling behind the speaker |
-| 6 | No audio level monitoring | No way to verify the input is actually receiving signal before going live |
-| 7 | Midas script is untested and functionally identical to the default-device script | The "Midas" script is aspirational — it does nothing Midas-specific |
-| 8 | No graceful error recovery | A transient Azure error kills the session |
-| 9 | Single target language hard-coded | Cannot switch to another language pair without editing source |
-| 10 | No UI — console only | Not usable by a non-technical operator |
+
+| #   | Problem                                                                          | Impact                                                                                               |
+| --- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 1   | Hard-coded to OS default microphone/speaker — no device selection                | Cannot target a specific Midas channel or virtual cable without changing Windows defaults every time |
+| 2   | No speed or pitch control on TTS output                                          | If the speaker talks fast, the translated English audio falls behind and sounds unnatural            |
+| 3   | No virtual audio output routing                                                  | Cannot feed translated audio into Teams as a "microphone" source                                     |
+| 4   | No persistent configuration                                                      | Every parameter must be changed in code and restarted                                                |
+| 5   | No lag/latency indicator                                                         | Operator has no idea if translation is falling behind the speaker                                    |
+| 6   | No audio level monitoring                                                        | No way to verify the input is actually receiving signal before going live                            |
+| 7   | Midas script is untested and functionally identical to the default-device script | The "Midas" script is aspirational — it does nothing Midas-specific                                  |
+| 8   | No graceful error recovery                                                       | A transient Azure error kills the session                                                            |
+| 9   | Single target language hard-coded                                                | Cannot switch to another language pair without editing source                                        |
+| 10  | No UI — console only                                                             | Not usable by a non-technical operator                                                               |
+
 
 ---
 
@@ -29,38 +31,42 @@ The application must be simple to use, fully configurable, resilient to real-wor
 
 ### 3.1 Functional Requirements
 
-| ID | Requirement | Priority |
-|----|-------------|----------|
-| F-01 | Enumerate and select any audio **input** device (physical mic, mixer channel, loopback) | Must |
-| F-02 | Enumerate and select any audio **output** device (physical speaker, virtual cable) | Must |
-| F-03 | Route TTS output to a **virtual audio device** (VB-CABLE, VoiceMeeter, etc.) for use as a Teams mic | Must |
-| F-04 | Adjustable TTS **speaking rate** (0.5× – 2.0×) | Must |
-| F-05 | Adjustable TTS **pitch** (-50% – +50%) | Must |
-| F-06 | Real-time **lag indicator** showing how far behind TTS playback is from live speech | Must |
-| F-07 | Persistent **configuration** saved to disk, loaded on startup | Must |
-| F-08 | Full **GUI** with intuitive controls | Must |
-| F-09 | Selectable **source language** (default: Romanian) | Must |
-| F-10 | Selectable **target language** (default: English) | Must |
-| F-11 | Selectable **TTS voice** from the Azure voice gallery | Must |
-| F-12 | Input **audio level meter** (VU) to confirm signal before going live | Should |
-| F-13 | Log panel inside the GUI showing recognized text, translations, and system messages | Should |
-| F-14 | **Hotkey** to start/stop translation without focusing the window | Should |
-| F-15 | **Profanity filter** toggle (Azure supports this natively) | Should |
-| F-16 | **Auto-reconnect** on transient Azure errors | Should |
-| F-17 | **TTS queue depth** display alongside the lag indicator | Should |
-| F-18 | Option to **log translations** to a timestamped text file (transcript) | Could |
-| F-19 | Option to **simultaneously output** to both a virtual device and physical speakers (dual output) | Could |
-| F-20 | **Noise suppression** toggle for the input stream | Could |
+
+| ID   | Requirement                                                                                         | Priority |
+| ---- | --------------------------------------------------------------------------------------------------- | -------- |
+| F-01 | Enumerate and select any audio **input** device (physical mic, mixer channel, loopback)             | Must     |
+| F-02 | Enumerate and select any audio **output** device (physical speaker, virtual cable)                  | Must     |
+| F-03 | Route TTS output to a **virtual audio device** (VB-CABLE, VoiceMeeter, etc.) for use as a Teams mic | Must     |
+| F-04 | Adjustable TTS **speaking rate** (0.5× – 2.0×)                                                      | Must     |
+| F-05 | Adjustable TTS **pitch** (-50% – +50%)                                                              | Must     |
+| F-06 | Real-time **lag indicator** showing how far behind TTS playback is from live speech                 | Must     |
+| F-07 | Persistent **configuration** saved to disk, loaded on startup                                       | Must     |
+| F-08 | Full **GUI** with intuitive controls                                                                | Must     |
+| F-09 | Selectable **source language** (default: Romanian)                                                  | Must     |
+| F-10 | Selectable **target language** (default: English)                                                   | Must     |
+| F-11 | Selectable **TTS voice** from the Azure voice gallery                                               | Must     |
+| F-12 | Input **audio level meter** (VU) to confirm signal before going live                                | Should   |
+| F-13 | Log panel inside the GUI showing recognized text, translations, and system messages                 | Should   |
+| F-14 | **Hotkey** to start/stop translation without focusing the window                                    | Should   |
+| F-15 | **Profanity filter** toggle (Azure supports this natively)                                          | Should   |
+| F-16 | **Auto-reconnect** on transient Azure errors                                                        | Should   |
+| F-17 | **TTS queue depth** display alongside the lag indicator                                             | Should   |
+| F-18 | Option to **log translations** to a timestamped text file (transcript)                              | Could    |
+| F-19 | Option to **simultaneously output** to both a virtual device and physical speakers (dual output)    | Could    |
+| F-20 | **Noise suppression** toggle for the input stream                                                   | Could    |
+
 
 ### 3.2 Non-Functional Requirements
 
-| ID | Requirement |
-|----|-------------|
-| NF-01 | Application must start and be operational within 5 seconds on a modern Windows PC |
+
+| ID    | Requirement                                                                                                                           |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| NF-01 | Application must start and be operational within 5 seconds on a modern Windows PC                                                     |
 | NF-02 | End-to-end latency (speech → translated audio begins playing) must not exceed the Azure service round-trip + 500 ms of local overhead |
-| NF-03 | Memory usage must stay under 300 MB during normal operation |
-| NF-04 | Must run on Windows 10/11 (primary), with no hard OS-specific dependencies that would prevent a future macOS port |
-| NF-05 | All secrets (API keys) must be stored outside the config file, in environment variables or an encrypted local vault |
+| NF-03 | Memory usage must stay under 300 MB during normal operation                                                                           |
+| NF-04 | Must run on Windows 10/11 (primary), with no hard OS-specific dependencies that would prevent a future macOS port                     |
+| NF-05 | All secrets (API keys) must be stored outside the config file, in environment variables or an encrypted local vault                   |
+
 
 ---
 
@@ -99,6 +105,7 @@ The application must be simple to use, fully configurable, resilient to real-wor
 #### 4.2.1 Configuration Manager (`config_manager.py`)
 
 Responsibilities:
+
 - Load configuration from a JSON file (`bcbtranslate_config.json`) at startup.
 - Provide typed, validated access to every configurable parameter.
 - Save changes atomically (write to temp file, then rename) to avoid corruption.
@@ -169,6 +176,7 @@ Configuration file location: `%APPDATA%\BCBTranslate\bcbtranslate_config.json`
 ```
 
 Key design decisions:
+
 - Azure keys are **never** stored in this file. The config only records the **names** of the environment variables to read. This keeps the config file safe to share or back up.
 - `input_device_id` and `output_device_id` store the OS-level device identifier string (not an index, which can change). A `null` value means "use OS default".
 - `secondary_output_device_id` enables the dual-output feature (e.g., physical speakers + virtual cable simultaneously).
@@ -176,6 +184,7 @@ Key design decisions:
 #### 4.2.2 Audio Router (`audio_router.py`)
 
 Responsibilities:
+
 - Enumerate all audio input and output devices on the system, returning friendly names and stable identifiers.
 - Detect virtual audio devices (VB-CABLE, VoiceMeeter, CABLE Input, etc.).
 - Provide real-time audio level (RMS) from the selected input for the VU meter.
@@ -185,6 +194,7 @@ Responsibilities:
 **Device Enumeration Strategy:**
 
 The Azure Speech SDK's `AudioConfig` supports specifying a device by its **endpoint ID** on Windows (WASAPI device ID). We will use `sounddevice` (which wraps PortAudio) for enumeration because it provides:
+
 - Device name
 - Host API (WASAPI, MME, etc.)
 - Number of input/output channels
@@ -229,6 +239,7 @@ This approach is more complex but gives us full control over where audio goes.
 #### 4.2.3 Translation Pipeline (`translation_pipeline.py`)
 
 Responsibilities:
+
 - Own the lifecycle of the Azure `TranslationRecognizer`.
 - Manage the TTS queue and the TTS worker thread.
 - Apply SSML-based speed and pitch adjustments to every TTS utterance.
@@ -271,6 +282,7 @@ Instead of calling `speak_text_async(text)`, we construct SSML:
 ```
 
 This allows real-time control of:
+
 - `rate`: speaking speed, e.g. `"slow"`, `"fast"`, `"+30%"`, `"1.5"`
 - `pitch`: voice pitch, e.g. `"low"`, `"high"`, `"+10%"`, `"-5%"`
 - `volume`: output volume (though we prefer OS-level volume control)
@@ -292,18 +304,21 @@ class Utterance:
 ```
 
 From these timestamps we compute:
+
 - **Queue depth**: number of items in `tts_queue` at any moment.
 - **Current lag**: `synthesis_done_at - recognized_at` for the most recently completed utterance. This is the wall-clock delay the listener experiences.
 - **Estimated lag**: for items still in the queue, we estimate based on average TTS duration.
 - **Lag trend**: increasing / stable / decreasing (computed over a sliding window of 10 utterances).
 
 When queue depth exceeds the configurable `tts_queue_warning_threshold`, the GUI shows a warning. When it exceeds `max_tts_queue_size`, the pipeline can optionally:
+
 1. Drop the oldest queued utterance (lossy but keeps real-time).
 2. Automatically increase TTS speaking rate by 10% per excess item (adaptive rate — user can enable/disable this).
 
 #### 4.2.4 Monitoring & Metrics (`monitor.py`)
 
 Responsibilities:
+
 - Aggregate lag data and compute statistics.
 - Detect prolonged lag and emit warnings.
 - Track Azure service health (consecutive errors, reconnect attempts).
@@ -396,19 +411,22 @@ Every change in the Settings dialog is **live-previewed** where possible (e.g., 
 
 The lag indicator uses both color and a 5-dot scale:
 
-| Lag | Dots | Color | Meaning |
-|-----|------|-------|---------|
-| < 1s | ●○○○○ | Green | Excellent — real-time |
-| 1–2s | ●●○○○ | Green | Good — slight natural delay |
-| 2–4s | ●●●○○ | Yellow | Noticeable — speaker is fast |
-| 4–6s | ●●●●○ | Orange | Warning — consider increasing TTS speed |
-| > 6s | ●●●●● | Red | Critical — TTS cannot keep up, utterances may be dropped |
+
+| Lag  | Dots  | Color  | Meaning                                                  |
+| ---- | ----- | ------ | -------------------------------------------------------- |
+| < 1s | ●○○○○ | Green  | Excellent — real-time                                    |
+| 1–2s | ●●○○○ | Green  | Good — slight natural delay                              |
+| 2–4s | ●●●○○ | Yellow | Noticeable — speaker is fast                             |
+| 4–6s | ●●●●○ | Orange | Warning — consider increasing TTS speed                  |
+| > 6s | ●●●●● | Red    | Critical — TTS cannot keep up, utterances may be dropped |
+
 
 The exact numeric lag (in seconds) is always displayed alongside the dots.
 
 **System Tray:**
 
 When minimized, the app lives in the system tray with:
+
 - Colored icon reflecting lag status (green/yellow/red).
 - Right-click menu: Start/Stop, Show, Settings, Exit.
 - Tooltip showing current lag and queue depth.
@@ -416,6 +434,7 @@ When minimized, the app lives in the system tray with:
 #### 4.2.6 OTA Updater (`updater.py`)
 
 Responsibilities:
+
 - Check the GitHub Releases API for a newer version on application startup.
 - Present a non-blocking prompt if an update is available, showing version, size, and release notes.
 - Download the Inno Setup installer to a temp file with a progress bar dialog.
@@ -464,6 +483,7 @@ Application Start
 ```
 
 Key design decisions:
+
 - Uses only `urllib.request` (stdlib) — no extra dependency.
 - The installer `.exe` asset is identified from GitHub Release assets by file name.
 - The Inno Setup installer's `/SILENT` flag shows a progress bar but requires no user interaction. `/CLOSEAPPLICATIONS` tells Inno Setup to close the running BCBTranslate instance.
@@ -473,6 +493,7 @@ Key design decisions:
 #### 4.2.7 Azure SDK Wrapper (`azure_wrapper.py`)
 
 Responsibilities:
+
 - Encapsulate all Azure Speech SDK interactions.
 - Handle authentication and connection lifecycle.
 - Provide automatic reconnection with exponential backoff.
@@ -579,6 +600,7 @@ audio_config = speechsdk.audio.AudioConfig(device_name=endpoint_id)
 ```
 
 For output:
+
 ```python
 audio_output = speechsdk.audio.AudioOutputConfig(device_name=endpoint_id)
 ```
@@ -613,6 +635,7 @@ Virtual audio cables (VB-CABLE, VoiceMeeter) appear as regular audio devices in 
 - `VoiceMeeter Input` / `VoiceMeeter Output`
 
 The application will:
+
 1. Detect these by name pattern and mark them with `is_virtual = True`.
 2. In the UI, group virtual devices separately with a clear label.
 3. Provide a brief in-app guide: "To use with Microsoft Teams, select a virtual cable as Output here, then select its matching Input as the microphone in Teams."
@@ -707,11 +730,13 @@ lag = tts_done_timestamp - recognition_timestamp
 ```
 
 This captures:
+
 - Time spent waiting in the queue (the dominant factor).
 - TTS synthesis time (Azure network round-trip for TTS).
 - Audio playback duration.
 
 We also compute:
+
 - **Pipeline latency** (excluding playback): `tts_start_timestamp - recognition_timestamp` — how long the utterance waited before synthesis began.
 - **Rolling average** over the last 10 utterances.
 
@@ -719,14 +744,16 @@ We also compute:
 
 Azure Speech SDK errors we must handle:
 
-| Error | Response |
-|-------|----------|
+
+| Error                                                   | Response                                         |
+| ------------------------------------------------------- | ------------------------------------------------ |
 | `CancellationReason.Error` with `AuthenticationFailure` | Show error, do not retry (credentials are wrong) |
-| `CancellationReason.Error` with `ConnectionFailure` | Retry with backoff |
-| `CancellationReason.Error` with `ServiceTimeout` | Retry immediately once, then backoff |
-| `CancellationReason.Error` with `RuntimeError` | Log, attempt restart |
-| `CancellationReason.EndOfStream` | Normal end, restart if still running |
-| Network-level exceptions | Retry with backoff |
+| `CancellationReason.Error` with `ConnectionFailure`     | Retry with backoff                               |
+| `CancellationReason.Error` with `ServiceTimeout`        | Retry immediately once, then backoff             |
+| `CancellationReason.Error` with `RuntimeError`          | Log, attempt restart                             |
+| `CancellationReason.EndOfStream`                        | Normal end, restart if still running             |
+| Network-level exceptions                                | Retry with backoff                               |
+
 
 During reconnection, the GUI shows a pulsing "Reconnecting..." indicator. The TTS queue is preserved (not flushed) so that any utterances recognized just before disconnection are still synthesized after reconnecting.
 
@@ -757,21 +784,23 @@ File name format: `transcript_2026-04-02_10-00-00.txt`
 
 ## 7. Technology Stack
 
-| Component | Technology | Version | Rationale |
-|-----------|-----------|---------|-----------|
-| Language | Python | 3.11+ | Existing prototype language; Azure SDK has excellent Python support |
-| GUI Framework | PyQt6 | 6.6+ | Native feel, signal/slot pattern, stylesheet theming, system tray, good Windows support |
-| Azure SDK | azure-cognitiveservices-speech | 1.38+ | Core translation and TTS engine |
-| Audio enumeration | sounddevice + comtypes | latest | Cross-platform audio with WASAPI fallback for endpoint IDs |
-| Audio processing | numpy | latest | PCM buffer manipulation for dual output |
-| Config format | JSON | — | Human-readable, built-in Python support, no extra dependency |
-| Env management | python-dotenv | latest | Load .env files for API keys |
-| Global hotkeys | pynput | latest | Cross-platform global keyboard listener |
-| WebRTC streaming | FFmpeg (primary) | 6.1+ | Native C performance for Opus encoding + WHIP transport; lowest latency |
-| WebRTC fallback | aiortc | 1.9+ | Pure-Python WebRTC when FFmpeg is unavailable; higher latency |
-| Packaging | PyInstaller | latest | Single-file .exe distribution for non-technical operators |
 
-**`requirements.txt`:**
+| Component         | Technology                     | Version | Rationale                                                                               |
+| ----------------- | ------------------------------ | ------- | --------------------------------------------------------------------------------------- |
+| Language          | Python                         | 3.11+   | Existing prototype language; Azure SDK has excellent Python support                     |
+| GUI Framework     | PyQt6                          | 6.6+    | Native feel, signal/slot pattern, stylesheet theming, system tray, good Windows support |
+| Azure SDK         | azure-cognitiveservices-speech | 1.38+   | Core translation and TTS engine                                                         |
+| Audio enumeration | sounddevice + comtypes         | latest  | Cross-platform audio with WASAPI fallback for endpoint IDs                              |
+| Audio processing  | numpy                          | latest  | PCM buffer manipulation for dual output                                                 |
+| Config format     | JSON                           | —       | Human-readable, built-in Python support, no extra dependency                            |
+| Env management    | python-dotenv                  | latest  | Load .env files for API keys                                                            |
+| Global hotkeys    | pynput                         | latest  | Cross-platform global keyboard listener                                                 |
+| WebRTC streaming  | FFmpeg (primary)               | 6.1+    | Native C performance for Opus encoding + WHIP transport; lowest latency                 |
+| WebRTC fallback   | aiortc                         | 1.9+    | Pure-Python WebRTC when FFmpeg is unavailable; higher latency                           |
+| Packaging         | PyInstaller                    | latest  | Single-file .exe distribution for non-technical operators                               |
+
+
+`**requirements.txt`:**
 
 ```
 PyQt6>=6.6
@@ -824,6 +853,7 @@ Main Thread (Qt Event Loop)
 ```
 
 **Thread Safety Rules:**
+
 1. All GUI updates happen on the main thread. Worker threads emit Qt signals; the main thread's event loop dispatches them to slots.
 2. The `tts_queue` is a `queue.Queue` (inherently thread-safe).
 3. Configuration changes from the GUI are applied via a lock-protected method on each component.
@@ -852,10 +882,12 @@ WebRTCPanel (GUI)                 WebRTCStreamer (core)
 
 ### Backends
 
-| Backend | Latency | Requirements | Notes |
-|---------|---------|-------------|-------|
-| **FFmpeg** (primary) | ~300-500ms | FFmpeg 6.1+ with WHIP muxer on PATH | Native C Opus encoding, ICE, DTLS, SRTP. Comparable to BUTT. |
-| **aiortc** (fallback) | ~800-1000ms | `pip install aiortc` | Pure Python. Higher latency due to GIL and asyncio overhead. |
+
+| Backend               | Latency     | Requirements                        | Notes                                                        |
+| --------------------- | ----------- | ----------------------------------- | ------------------------------------------------------------ |
+| **FFmpeg** (primary)  | ~300-500ms  | FFmpeg 6.1+ with WHIP muxer on PATH | Native C Opus encoding, ICE, DTLS, SRTP. Comparable to BUTT. |
+| **aiortc** (fallback) | ~800-1000ms | `pip install aiortc`                | Pure Python. Higher latency due to GIL and asyncio overhead. |
+
 
 Backend selection is automatic: if FFmpeg is found on PATH and supports the WHIP muxer (`-f whip`), it is used. Otherwise, `aiortc` is attempted. If neither is available, the stream button is disabled with a tooltip explaining what to install.
 
@@ -868,12 +900,14 @@ Backend selection is automatic: if FFmpeg is found on PATH and supports the WHIP
 
 Four fields are persisted in `AppConfig`:
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `webrtc_whip_url` | `str` | `""` | WHIP endpoint URL |
-| `webrtc_bearer_token` | `str` | `""` | Optional bearer token for authentication |
-| `webrtc_audio_source` | `str` | `"original"` | `"original"` or `"translated"` |
-| `webrtc_panel_expanded` | `bool` | `False` | Whether the collapsible panel is open |
+
+| Field                   | Type   | Default      | Description                              |
+| ----------------------- | ------ | ------------ | ---------------------------------------- |
+| `webrtc_whip_url`       | `str`  | `""`         | WHIP endpoint URL                        |
+| `webrtc_bearer_token`   | `str`  | `""`         | Optional bearer token for authentication |
+| `webrtc_audio_source`   | `str`  | `"original"` | `"original"` or `"translated"`           |
+| `webrtc_panel_expanded` | `bool` | `False`      | Whether the collapsible panel is open    |
+
 
 ### GUI Integration
 
@@ -883,19 +917,21 @@ The `WebRTCPanel` sits on the main window as a collapsible section between the s
 
 ## 10. Error Scenarios & Recovery
 
-| Scenario | Detection | Recovery |
-|----------|-----------|----------|
-| Azure credentials missing | Startup validation | Show setup wizard, cannot proceed without valid creds |
-| Azure credentials invalid | `AuthenticationFailure` on first connect | Show error dialog with link to Azure portal |
-| Network lost mid-session | `ConnectionFailure` event | Auto-reconnect with backoff; queue preserves pending utterances |
-| Audio device disconnected | `sounddevice` exception or Azure input error | Pause recognition, notify user, offer device refresh |
-| TTS queue overflow (speaker too fast) | `queue.qsize() > max_tts_queue_size` | Drop oldest, increase rate (if adaptive), warn operator |
-| Azure service degraded (slow responses) | Lag exceeds 10s sustained | Warning in UI; suggest operator slow down or increase TTS rate |
-| Virtual cable not installed | No virtual devices found | Show info dialog explaining how to install VB-CABLE |
-| WebRTC: FFmpeg not found | Backend detection at stream start | Fall back to aiortc; log info message |
-| WebRTC: WHIP endpoint unreachable | HTTP error on SDP offer POST | Show error in stream log; stop stream |
-| WebRTC: ICE connection failure | ICE state → `failed` | Log error; stop stream; user can retry |
-| WebRTC: FFmpeg process crash | Non-zero exit code / broken pipe | Log stderr output; update status to disconnected |
+
+| Scenario                                | Detection                                    | Recovery                                                        |
+| --------------------------------------- | -------------------------------------------- | --------------------------------------------------------------- |
+| Azure credentials missing               | Startup validation                           | Show setup wizard, cannot proceed without valid creds           |
+| Azure credentials invalid               | `AuthenticationFailure` on first connect     | Show error dialog with link to Azure portal                     |
+| Network lost mid-session                | `ConnectionFailure` event                    | Auto-reconnect with backoff; queue preserves pending utterances |
+| Audio device disconnected               | `sounddevice` exception or Azure input error | Pause recognition, notify user, offer device refresh            |
+| TTS queue overflow (speaker too fast)   | `queue.qsize() > max_tts_queue_size`         | Drop oldest, increase rate (if adaptive), warn operator         |
+| Azure service degraded (slow responses) | Lag exceeds 10s sustained                    | Warning in UI; suggest operator slow down or increase TTS rate  |
+| Virtual cable not installed             | No virtual devices found                     | Show info dialog explaining how to install VB-CABLE             |
+| WebRTC: FFmpeg not found                | Backend detection at stream start            | Fall back to aiortc; log info message                           |
+| WebRTC: WHIP endpoint unreachable       | HTTP error on SDP offer POST                 | Show error in stream log; stop stream                           |
+| WebRTC: ICE connection failure          | ICE state → `failed`                         | Log error; stop stream; user can retry                          |
+| WebRTC: FFmpeg process crash            | Non-zero exit code / broken pipe             | Log stderr output; update status to disconnected                |
+
 
 ---
 
@@ -903,17 +939,19 @@ The `WebRTCPanel` sits on the main window as a collapsible section between the s
 
 The architecture is designed to accommodate future enhancements without structural changes:
 
-| Future Feature | Extension Point |
-|----------------|----------------|
-| Additional translation engines (Google, DeepL) | New class implementing a `TranslationService` protocol; swap via config |
-| Whisper-based local STT | New `RecognitionService` implementation; plug into the pipeline |
-| Multiple simultaneous target languages | Pipeline supports multiple target languages; add a tab per language in the GUI |
-| Cloud-hosted mode (translation as a service) | The pipeline is already decoupled from the GUI; wrap it in a FastAPI server |
-| Mobile companion app | Expose metrics and controls via a lightweight WebSocket API |
-| Speaker diarization | Azure SDK supports diarization; add speaker labels to the log and transcript |
-| Custom vocabulary / glossary | Azure STT supports phrase lists; add a glossary editor in Settings |
-| Audio recording (raw input) | Tap the input stream in AudioRouter and write to WAV |
-| Automatic language detection | Azure supports auto-detect source language; toggle in config |
+
+| Future Feature                                 | Extension Point                                                                |
+| ---------------------------------------------- | ------------------------------------------------------------------------------ |
+| Additional translation engines (Google, DeepL) | New class implementing a `TranslationService` protocol; swap via config        |
+| Whisper-based local STT                        | New `RecognitionService` implementation; plug into the pipeline                |
+| Multiple simultaneous target languages         | Pipeline supports multiple target languages; add a tab per language in the GUI |
+| Cloud-hosted mode (translation as a service)   | The pipeline is already decoupled from the GUI; wrap it in a FastAPI server    |
+| Mobile companion app                           | Expose metrics and controls via a lightweight WebSocket API                    |
+| Speaker diarization                            | Azure SDK supports diarization; add speaker labels to the log and transcript   |
+| Custom vocabulary / glossary                   | Azure STT supports phrase lists; add a glossary editor in Settings             |
+| Audio recording (raw input)                    | Tap the input stream in AudioRouter and write to WAV                           |
+| Automatic language detection                   | Azure supports auto-detect source language; toggle in config                   |
+
 
 ---
 
@@ -952,11 +990,12 @@ The WebRTC streaming module uses FFmpeg as its primary backend. FFmpeg is **not 
 ### First-Run Experience
 
 On first launch (no config file exists):
+
 1. Show a welcome/setup dialog.
 2. Guide the user through:
-   - Verifying Azure credentials (test connection button).
-   - Selecting input and output devices.
-   - Choosing a voice and testing it.
+  - Verifying Azure credentials (test connection button).
+  - Selecting input and output devices.
+  - Choosing a voice and testing it.
 3. Save the initial config.
 4. Open the main window, ready to translate.
 
@@ -1008,26 +1047,30 @@ The config schema includes a `version` field. When the app is updated and the sc
 
 ## 14. Testing Strategy
 
-| Layer | Testing Approach |
-|-------|-----------------|
-| Config Manager | Unit tests: load, save, validate, migrate, defaults |
-| SSML Builder | Unit tests: various rate/pitch combinations, XML escaping |
-| Audio Router | Integration tests: enumerate devices (mocked for CI, real for manual testing) |
-| Monitor / Metrics | Unit tests: lag calculations, threshold detection, rolling averages |
-| Translation Pipeline | Integration tests with Azure (requires credentials; marked as slow/optional) |
-| GUI | Manual testing checklist; automated smoke test with `pytest-qt` |
+
+| Layer                | Testing Approach                                                              |
+| -------------------- | ----------------------------------------------------------------------------- |
+| Config Manager       | Unit tests: load, save, validate, migrate, defaults                           |
+| SSML Builder         | Unit tests: various rate/pitch combinations, XML escaping                     |
+| Audio Router         | Integration tests: enumerate devices (mocked for CI, real for manual testing) |
+| Monitor / Metrics    | Unit tests: lag calculations, threshold detection, rolling averages           |
+| Translation Pipeline | Integration tests with Azure (requires credentials; marked as slow/optional)  |
+| GUI                  | Manual testing checklist; automated smoke test with `pytest-qt`               |
+
 
 ---
 
 ## 15. Open Questions & Decisions
 
-| # | Question | Recommendation | Status |
-|---|----------|---------------|--------|
-| 1 | Should we support macOS now or later? | Later — current requirement is Windows only; architecture avoids hard locks but WASAPI enumeration is Windows-specific | **Decided: Windows first** |
-| 2 | VB-CABLE or VoiceMeeter as the recommended virtual cable? | VB-CABLE is simpler (one cable, free). Document VoiceMeeter as an alternative for advanced users. | **Open** |
-| 3 | Should the TTS queue drop old or new utterances on overflow? | Drop oldest — the audience benefits from hearing the most recent translation, not a backlog. | **Recommended** |
-| 4 | Should we support real-time interim/partial translations in the log? | Yes, but display them in gray/italic and replace with final text. Azure's `recognizing` event provides these. | **Recommended** |
-| 5 | Should the app auto-update? | Implemented: checks GitHub Releases API on startup, prompts user, downloads Inno Setup installer, runs `/SILENT` upgrade. Configurable via `auto_check_updates`. | **Implemented** |
+
+| #   | Question                                                             | Recommendation                                                                                                                                                   | Status                     |
+| --- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| 1   | Should we support macOS now or later?                                | Later — current requirement is Windows only; architecture avoids hard locks but WASAPI enumeration is Windows-specific                                           | **Decided: Windows first** |
+| 2   | VB-CABLE or VoiceMeeter as the recommended virtual cable?            | VB-CABLE is simpler (one cable, free). Document VoiceMeeter as an alternative for advanced users.                                                                | **Open**                   |
+| 3   | Should the TTS queue drop old or new utterances on overflow?         | Drop oldest — the audience benefits from hearing the most recent translation, not a backlog.                                                                     | **Recommended**            |
+| 4   | Should we support real-time interim/partial translations in the log? | Yes, but display them in gray/italic and replace with final text. Azure's `recognizing` event provides these.                                                    | **Recommended**            |
+| 5   | Should the app auto-update?                                          | Implemented: checks GitHub Releases API on startup, prompts user, downloads Inno Setup installer, runs `/SILENT` upgrade. Configurable via `auto_check_updates`. | **Implemented**            |
+
 
 ---
 
