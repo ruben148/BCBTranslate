@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import queue
 import threading
 from typing import Callable
 
@@ -23,6 +24,8 @@ class AudioRouter:
         self._input_device_id: int | None = None
         self._vu_active = False
         self._output_streams: list[sd.RawOutputStream] = []
+        self._output_queue: queue.Queue[bytes | None] = queue.Queue()
+        self._playback_thread: threading.Thread | None = None
         self._vu_callback: Callable[[float], None] | None = None
         self._vu_lock = threading.Lock()
         self._current_rms: float = 0.0
@@ -230,6 +233,9 @@ class AudioRouter:
                     samplerate=sample_rate,
                     channels=channels,
                     dtype="int16",
+                    # Larger host buffer absorbs irregular Azure chunk timing; writing
+                    # from a dedicated thread avoids blocking the SDK push callback.
+                    latency="high",
                 )
                 stream.start()
                 self._output_streams.append(stream)
@@ -237,21 +243,47 @@ class AudioRouter:
             except Exception:
                 logger.exception("Failed to open output stream (device=%s)", dev_id)
 
+        if self._output_streams:
+            self._playback_thread = threading.Thread(
+                target=self._output_playback_worker,
+                daemon=True,
+                name="tts-output-playback",
+            )
+            self._playback_thread.start()
+
+    def _output_playback_worker(self) -> None:
+        """Drain queued PCM into PortAudio. Runs on a dedicated thread so the
+        Azure PushAudioOutputStream callback never blocks on ``stream.write``."""
+        while True:
+            item = self._output_queue.get()
+            if item is None:
+                break
+            if not item:
+                continue
+            try:
+                audio_array = np.frombuffer(item, dtype=np.int16)
+                if audio_array.size == 0:
+                    continue
+                for stream in self._output_streams:
+                    stream.write(audio_array)
+            except Exception:
+                logger.debug("Output stream write error", exc_info=True)
+
     def write_output(self, pcm_data: bytes) -> None:
         # Notify listeners FIRST so WebRTC buffers receive data before the
-        # (potentially blocking) device write throttles the TTS thread.
+        # playback queue (same ordering as before the playback thread existed).
         with self._output_listeners_lock:
             for listener in self._output_listeners:
                 try:
                     listener(pcm_data)
                 except Exception:
                     logger.debug("Output listener error", exc_info=True)
-        audio_array = np.frombuffer(pcm_data, dtype=np.int16)
-        for stream in self._output_streams:
-            try:
-                stream.write(audio_array)
-            except Exception:
-                logger.debug("Output stream write error", exc_info=True)
+
+        if not pcm_data:
+            return
+        if self._playback_thread is None or not self._playback_thread.is_alive():
+            return
+        self._output_queue.put(pcm_data)
 
     def add_output_listener(self, callback: Callable[[bytes], None]) -> None:
         with self._output_listeners_lock:
@@ -264,6 +296,16 @@ class AudioRouter:
                 self._output_listeners.remove(callback)
 
     def close_output_streams(self) -> None:
+        if self._playback_thread is not None:
+            try:
+                while True:
+                    self._output_queue.get_nowait()
+            except queue.Empty:
+                pass
+            self._output_queue.put(None)
+            self._playback_thread.join(timeout=5.0)
+            self._playback_thread = None
+
         for stream in self._output_streams:
             try:
                 stream.stop()
