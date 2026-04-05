@@ -110,6 +110,9 @@ class AzureTranslationService(QObject):
         self._is_recognizing = False
         self._lock = threading.Lock()
         self._restarting = False
+        # Set False when the pipeline begins teardown so SDK callbacks and
+        # auto-segmentation restarts cannot enqueue work after Stop.
+        self._accept_events = True
 
         self._auto_seg = AutoSegmentationManager(
             target_min_s=config.auto_seg_target_min_s,
@@ -260,6 +263,8 @@ class AzureTranslationService(QObject):
     # -- recognition callbacks ---------------------------------------------
 
     def _on_recognized(self, evt: speechsdk.translation.TranslationRecognitionEventArgs):
+        if not self._accept_events:
+            return
         if evt.result.reason == speechsdk.ResultReason.TranslatedSpeech:
             source = evt.result.text
             target_lang = self._config.target_language
@@ -273,6 +278,8 @@ class AzureTranslationService(QObject):
                 self._evaluate_auto_segmentation(duration_s)
 
     def _on_recognizing(self, evt: speechsdk.translation.TranslationRecognitionEventArgs):
+        if not self._accept_events:
+            return
         if evt.result.reason == speechsdk.ResultReason.TranslatingSpeech:
             target_lang = self._config.target_language
             partial = evt.result.translations.get(target_lang, "")
@@ -315,7 +322,11 @@ class AzureTranslationService(QObject):
 
         def _do_restart():
             try:
+                if not self._accept_events:
+                    return
                 self.stop_recognition()
+                if not self._accept_events:
+                    return
                 self.start_recognition()
             finally:
                 self._restarting = False
@@ -444,7 +455,12 @@ class AzureTranslationService(QObject):
 
     # -- cleanup -----------------------------------------------------------
 
+    def notify_pipeline_stopping(self) -> None:
+        """Called by TranslationPipeline as soon as Stop is requested."""
+        self._accept_events = False
+
     def shutdown(self) -> None:
+        self._accept_events = False
         self.stop_recognition()
         self._audio_router.close_output_streams()
         self._synthesizer = None

@@ -81,9 +81,11 @@ class TranslationPipeline(QObject):
         self._azure.on_translated.connect(self._on_translated)
         self._azure.on_recognizing.connect(self.partial_result.emit)
         self._azure.on_error.connect(self._on_azure_error)
-        self._azure.on_connected.connect(lambda: self.connection_changed.emit(True))
-        self._azure.on_disconnected.connect(lambda: self.connection_changed.emit(False))
-        self._azure.segmentation_timeout_updated.connect(self.segmentation_updated.emit)
+        self._azure.on_connected.connect(self._on_azure_connected)
+        self._azure.on_disconnected.connect(self._on_azure_disconnected)
+        self._azure.segmentation_timeout_updated.connect(
+            self._on_segmentation_timeout_updated
+        )
 
         self._azure.build_synthesizer()
 
@@ -109,9 +111,9 @@ class TranslationPipeline(QObject):
         self._tts_thread = threading.Thread(target=self._tts_worker, daemon=True)
         self._tts_thread.start()
 
-        # Start Azure recognition
-        self._azure.start_recognition()
         self._is_running = True
+        # Start Azure recognition (callbacks may arrive immediately)
+        self._azure.start_recognition()
         self._monitor.start_session()
         self._reconnect_attempts = 0
 
@@ -125,10 +127,14 @@ class TranslationPipeline(QObject):
         self._is_running = False
         self.status_changed.emit("Stopping translation...")
 
-        if self._azure:
-            self._azure.stop_recognition()
+        az = self._azure
+        if az:
+            # Block SDK handlers and auto-segmentation restarts before stopping,
+            # so queued Qt events cannot enqueue TTS after this point.
+            az.notify_pipeline_stopping()
+            az.stop_recognition()
 
-        # Drain TTS queue
+        # Drain TTS queue (utterances already queued are still synthesized)
         self._tts_queue.put(None)
         if self._tts_thread and self._tts_thread.is_alive():
             self._tts_thread.join(timeout=5)
@@ -140,12 +146,36 @@ class TranslationPipeline(QObject):
 
         self._monitor.end_session()
 
-        if self._azure:
-            self._azure.shutdown()
+        if az:
+            self._disconnect_azure_signals(az)
+            az.shutdown()
             self._azure = None
 
         self.status_changed.emit("Translation stopped")
         self.connection_changed.emit(False)
+
+    def _disconnect_azure_signals(self, az: AzureTranslationService) -> None:
+        try:
+            az.on_translated.disconnect(self._on_translated)
+            az.on_recognizing.disconnect(self.partial_result.emit)
+            az.on_error.disconnect(self._on_azure_error)
+            az.on_connected.disconnect(self._on_azure_connected)
+            az.on_disconnected.disconnect(self._on_azure_disconnected)
+            az.segmentation_timeout_updated.disconnect(
+                self._on_segmentation_timeout_updated
+            )
+        except TypeError:
+            # No matching connection (e.g. partial teardown)
+            pass
+
+    def _on_azure_connected(self) -> None:
+        self.connection_changed.emit(True)
+
+    def _on_azure_disconnected(self) -> None:
+        self.connection_changed.emit(False)
+
+    def _on_segmentation_timeout_updated(self, timeout_ms: int, avg_duration: float) -> None:
+        self.segmentation_updated.emit(timeout_ms, avg_duration)
 
     # -- config hot-reload -------------------------------------------------
 
@@ -166,6 +196,8 @@ class TranslationPipeline(QObject):
     # -- internal: translation callback ------------------------------------
 
     def _on_translated(self, source: str, translated: str, timestamp: float) -> None:
+        if not self._is_running:
+            return
         utterance = Utterance(
             text=translated,
             source_text=source,
@@ -250,6 +282,8 @@ class TranslationPipeline(QObject):
     # -- internal: error handling & reconnect ------------------------------
 
     def _on_azure_error(self, message: str) -> None:
+        if not self._is_running:
+            return
         self._monitor.record_error(message)
         self.error_occurred.emit(message)
 
