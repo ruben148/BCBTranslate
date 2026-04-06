@@ -1,5 +1,5 @@
 PyQt6>=6.6
-azure-cognitiveservices-speech>=1.38
+azure-cognitiveservices-speech>=1.41
 sounddevice>=0.4
 numpy>=1.26
 python-dotenv>=1.0

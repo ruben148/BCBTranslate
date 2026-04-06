@@ -261,6 +261,19 @@ class MainWindow(QMainWindow):
         seg_group = QGroupBox("Segmentation")
         seg_layout = QVBoxLayout(seg_group)
 
+        self._default_seg_cb = QCheckBox(
+            "Use Azure default segmentation (semantic always on)"
+        )
+        self._default_seg_cb.setToolTip(
+            "When enabled, custom silence timeout, auto-adjust, and related\n"
+            "API overrides are not applied — Azure uses its defaults.\n"
+            "Semantic segmentation remains active.\n\n"
+            "The recognizer restarts when you toggle this while translating."
+        )
+        self._default_seg_cb.setChecked(self._cfg.config.use_default_segmentation)
+        self._default_seg_cb.toggled.connect(self._on_default_seg_toggled)
+        seg_layout.addWidget(self._default_seg_cb)
+
         silence_row = QHBoxLayout()
         silence_row.addWidget(QLabel("Silence:"))
         self._seg_timeout_spin = NoScrollSpinBox()
@@ -311,6 +324,8 @@ class MainWindow(QMainWindow):
         self._auto_seg_max_spin.valueChanged.connect(self._on_auto_seg_max_changed)
         thresh_row.addWidget(self._auto_seg_max_spin)
         seg_layout.addLayout(thresh_row)
+
+        self._refresh_segmentation_controls_enabled()
 
         ts_inner.addWidget(seg_group)
 
@@ -535,13 +550,26 @@ class MainWindow(QMainWindow):
 
     # -- segmentation controls -----------------------------------------------
 
+    def _refresh_segmentation_controls_enabled(self) -> None:
+        custom = not self._cfg.config.use_default_segmentation
+        self._seg_timeout_spin.setEnabled(custom)
+        self._auto_seg_cb.setEnabled(custom)
+        auto_on = custom and self._cfg.config.auto_segmentation_enabled
+        self._auto_seg_min_spin.setEnabled(auto_on)
+        self._auto_seg_max_spin.setEnabled(auto_on)
+
+    def _on_default_seg_toggled(self, checked: bool) -> None:
+        self._cfg.set("use_default_segmentation", checked)
+        self._cfg.save()
+        self._refresh_segmentation_controls_enabled()
+        self._pipeline.apply_segmentation_mode_change()
+
     def _on_seg_timeout_changed(self, value: int) -> None:
         self._cfg.set("segmentation_silence_timeout_ms", value)
 
     def _on_auto_seg_toggled(self, checked: bool) -> None:
         self._cfg.set("auto_segmentation_enabled", checked)
-        self._auto_seg_min_spin.setEnabled(checked)
-        self._auto_seg_max_spin.setEnabled(checked)
+        self._refresh_segmentation_controls_enabled()
 
     def _on_auto_seg_min_changed(self, value: float) -> None:
         self._cfg.set("auto_seg_target_min_s", value)
@@ -653,12 +681,16 @@ class MainWindow(QMainWindow):
             self._audio_router.gain = self._cfg.config.input_gain
 
             # Sync segmentation controls
+            self._default_seg_cb.blockSignals(True)
+            self._default_seg_cb.setChecked(self._cfg.config.use_default_segmentation)
+            self._default_seg_cb.blockSignals(False)
             self._seg_timeout_spin.setValue(
                 self._cfg.config.segmentation_silence_timeout_ms
             )
             self._auto_seg_cb.setChecked(self._cfg.config.auto_segmentation_enabled)
             self._auto_seg_min_spin.setValue(self._cfg.config.auto_seg_target_min_s)
             self._auto_seg_max_spin.setValue(self._cfg.config.auto_seg_target_max_s)
+            self._refresh_segmentation_controls_enabled()
 
             # Update hotkey
             self._hotkey.update_hotkey(self._cfg.config.hotkey_start_stop)

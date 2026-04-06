@@ -156,6 +156,23 @@ class AzureTranslationService(QObject):
         Reads the current ``input_device_name`` from config (already updated by
         the GUI). Does not emit disconnected/connected — the session stays live.
         """
+        self._rebuild_recognizer_session(
+            log_msg="Recognition input switched (device name=%r)",
+            log_arg=self._config.input_device_name,
+        )
+
+    def restart_recognition(self) -> None:
+        """Rebuild the recognizer with the current config (same input device).
+
+        Used after segmentation-related settings change so SDK properties apply.
+        """
+        self._rebuild_recognizer_session(log_msg="Recognition restarted (config reload)")
+
+    def _rebuild_recognizer_session(
+        self,
+        log_msg: str,
+        log_arg: object | None = None,
+    ) -> None:
         with self._lock:
             if not self._is_recognizing or not self._accept_events:
                 return
@@ -163,14 +180,14 @@ class AzureTranslationService(QObject):
                 if self._recognizer is not None:
                     self._recognizer.stop_continuous_recognition()
             except Exception:
-                logger.debug("Error stopping recognizer for input switch", exc_info=True)
+                logger.debug("Error stopping recognizer for rebuild", exc_info=True)
             self._close_input_stream()
             self._build_recognizer()
             self._recognizer.start_continuous_recognition()
-        logger.info(
-            "Recognition input switched (device name=%r)",
-            self._config.input_device_name,
-        )
+        if log_arg is not None:
+            logger.info(log_msg, log_arg)
+        else:
+            logger.info(log_msg)
 
     def _build_recognizer(self) -> None:
         translation_config = speechsdk.translation.SpeechTranslationConfig(
@@ -188,17 +205,23 @@ class AzureTranslationService(QObject):
         else:
             translation_config.set_profanity(speechsdk.ProfanityOption.Masked)
 
-        if self._config.noise_suppression:
-            translation_config.set_property(
-                speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs,
-                "3000",
-            )
-
-        seg_timeout = self._config.segmentation_silence_timeout_ms
         translation_config.set_property(
-            speechsdk.PropertyId.Speech_SegmentationSilenceTimeoutMs,
-            str(max(100, min(5000, seg_timeout))),
+            speechsdk.PropertyId.Speech_SegmentationStrategy,
+            "Semantic",
         )
+
+        if not self._config.use_default_segmentation:
+            if self._config.noise_suppression:
+                translation_config.set_property(
+                    speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs,
+                    "3000",
+                )
+
+            seg_timeout = self._config.segmentation_silence_timeout_ms
+            translation_config.set_property(
+                speechsdk.PropertyId.Speech_SegmentationSilenceTimeoutMs,
+                str(max(100, min(5000, seg_timeout))),
+            )
 
         audio_config = self._build_input_audio_config()
 
@@ -295,7 +318,10 @@ class AzureTranslationService(QObject):
                 ts = time.monotonic()
                 self.on_translated.emit(source, translated, ts)
 
-            if self._config.auto_segmentation_enabled:
+            if (
+                self._config.auto_segmentation_enabled
+                and not self._config.use_default_segmentation
+            ):
                 duration_s = evt.result.duration / TICKS_PER_SECOND
                 self._evaluate_auto_segmentation(duration_s)
 

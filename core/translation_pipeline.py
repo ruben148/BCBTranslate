@@ -233,6 +233,26 @@ class TranslationPipeline(QObject):
             logger.exception("Output device switch failed")
             self.error_occurred.emit(f"Could not switch output device: {exc}")
 
+    def apply_segmentation_mode_change(self) -> None:
+        """Rebuild the Azure recognizer so segmentation properties take effect."""
+        az = self._azure
+        if not self._is_running or az is None:
+            return
+
+        def _restart() -> None:
+            try:
+                az.restart_recognition()
+                self.status_changed.emit("Segmentation settings applied")
+            except Exception as exc:
+                logger.exception("Segmentation restart failed")
+                self.error_occurred.emit(f"Could not apply segmentation settings: {exc}")
+
+        threading.Thread(
+            target=_restart,
+            daemon=True,
+            name="bcb-segmentation-restart",
+        ).start()
+
     # -- internal: translation callback ------------------------------------
 
     def _on_translated(self, source: str, translated: str, timestamp: float) -> None:

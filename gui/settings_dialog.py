@@ -213,6 +213,16 @@ class SettingsDialog(QDialog):
         self._gain_spin.setSuffix("×")
         aform.addRow("Input gain:", self._gain_spin)
 
+        self._default_seg_cb = QCheckBox(
+            "Use Azure default segmentation (semantic always on)"
+        )
+        self._default_seg_cb.setToolTip(
+            "When enabled, custom silence timeout and auto-adjust are not sent to\n"
+            "Azure — the service uses its defaults. Semantic segmentation stays on."
+        )
+        self._default_seg_cb.toggled.connect(self._on_default_seg_toggled_settings)
+        aform.addRow("", self._default_seg_cb)
+
         self._seg_timeout_spin = QSpinBox()
         self._seg_timeout_spin.setRange(100, 5000)
         self._seg_timeout_spin.setSingleStep(100)
@@ -438,12 +448,12 @@ class SettingsDialog(QDialog):
         self._select_combo_data(self._profanity_combo, cfg.profanity_filter)
         self._noise_cb.setChecked(cfg.noise_suppression)
         self._gain_spin.setValue(cfg.input_gain)
+        self._default_seg_cb.setChecked(cfg.use_default_segmentation)
         self._seg_timeout_spin.setValue(cfg.segmentation_silence_timeout_ms)
         self._auto_seg_cb.setChecked(cfg.auto_segmentation_enabled)
         self._auto_seg_min_spin.setValue(cfg.auto_seg_target_min_s)
         self._auto_seg_max_spin.setValue(cfg.auto_seg_target_max_s)
-        self._auto_seg_min_spin.setEnabled(cfg.auto_segmentation_enabled)
-        self._auto_seg_max_spin.setEnabled(cfg.auto_segmentation_enabled)
+        self._sync_default_seg_dependencies()
 
         # Voice
         self._voice_browser.set_current_voice(cfg.voice_name)
@@ -475,6 +485,16 @@ class SettingsDialog(QDialog):
         self._auto_update_cb.setChecked(cfg.auto_check_updates)
 
     def _save(self) -> None:
+        c = self._cfg.config
+        seg_before = (
+            c.use_default_segmentation,
+            c.segmentation_silence_timeout_ms,
+            c.auto_segmentation_enabled,
+            c.auto_seg_target_min_s,
+            c.auto_seg_target_max_s,
+            c.noise_suppression,
+        )
+
         self._cfg.update(
             # Azure
             speech_key_env_var=self._key_var_edit.text().strip(),
@@ -485,6 +505,7 @@ class SettingsDialog(QDialog):
             profanity_filter=self._profanity_combo.currentData(),
             noise_suppression=self._noise_cb.isChecked(),
             input_gain=self._gain_spin.value(),
+            use_default_segmentation=self._default_seg_cb.isChecked(),
             segmentation_silence_timeout_ms=self._seg_timeout_spin.value(),
             auto_segmentation_enabled=self._auto_seg_cb.isChecked(),
             auto_seg_target_min_s=self._auto_seg_min_spin.value(),
@@ -521,6 +542,18 @@ class SettingsDialog(QDialog):
             self._cfg.set("voice_name", voice_name)
 
         self._cfg.save()
+
+        seg_after = (
+            self._cfg.config.use_default_segmentation,
+            self._cfg.config.segmentation_silence_timeout_ms,
+            self._cfg.config.auto_segmentation_enabled,
+            self._cfg.config.auto_seg_target_min_s,
+            self._cfg.config.auto_seg_target_max_s,
+            self._cfg.config.noise_suppression,
+        )
+        if seg_before != seg_after and self._pipeline.is_running:
+            self._pipeline.apply_segmentation_mode_change()
+
         self.accept()
 
     def _test_connection(self) -> None:
@@ -553,8 +586,18 @@ class SettingsDialog(QDialog):
             self._test_btn.setEnabled(True)
 
     def _on_auto_seg_toggled(self, checked: bool) -> None:
-        self._auto_seg_min_spin.setEnabled(checked)
-        self._auto_seg_max_spin.setEnabled(checked)
+        self._sync_default_seg_dependencies()
+
+    def _on_default_seg_toggled_settings(self, checked: bool) -> None:
+        self._sync_default_seg_dependencies()
+
+    def _sync_default_seg_dependencies(self) -> None:
+        custom = not self._default_seg_cb.isChecked()
+        self._seg_timeout_spin.setEnabled(custom)
+        self._auto_seg_cb.setEnabled(custom)
+        auto_on = custom and self._auto_seg_cb.isChecked()
+        self._auto_seg_min_spin.setEnabled(auto_on)
+        self._auto_seg_max_spin.setEnabled(auto_on)
 
     def _on_check_updates_clicked(self) -> None:
         main_win = self.parent()

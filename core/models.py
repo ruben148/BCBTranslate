@@ -131,6 +131,9 @@ class AppConfig:
     auto_segmentation_enabled: bool = False
     auto_seg_target_min_s: float = 5.0
     auto_seg_target_max_s: float = 15.0
+    # When True, do not set SegmentationSilenceTimeoutMs / EndSilenceTimeoutMs;
+    # Azure service defaults apply. Semantic segmentation stays enabled.
+    use_default_segmentation: bool = False
 
     # UI
     always_on_top: bool = False
