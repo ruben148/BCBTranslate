@@ -108,6 +108,7 @@ class AppConfig:
     speech_region_env_var: str = "AZURE_SPEECH_REGION"
 
     # Translation
+    translation_mode: str = "standard"  # "standard" or "interpreter"
     source_language: str = "ro-RO"
     target_language: str = "en"
     profanity_filter: str = "masked"

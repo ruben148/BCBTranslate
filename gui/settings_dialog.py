@@ -182,6 +182,19 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(w)
         form = QFormLayout()
 
+        self._mode_combo = QComboBox()
+        self._mode_combo.addItem("Standard", "standard")
+        self._mode_combo.addItem("Live Interpreter", "interpreter")
+        self._mode_combo.setToolTip(
+            "Standard: app-side TTS with speed/pitch control.\n"
+            "Live Interpreter: server-side TTS via v2 endpoint\n"
+            "(auto language detection, lower latency, no speed/pitch)."
+        )
+        self._mode_combo.currentIndexChanged.connect(
+            self._on_mode_changed_settings
+        )
+        form.addRow("Translation mode:", self._mode_combo)
+
         self._source_combo = QComboBox()
         for code, name in SOURCE_LANGUAGES:
             self._source_combo.addItem(f"{name} ({code})", code)
@@ -213,6 +226,11 @@ class SettingsDialog(QDialog):
         self._gain_spin.setSuffix("×")
         aform.addRow("Input gain:", self._gain_spin)
 
+        layout.addWidget(audio_group)
+
+        self._seg_settings_group = QGroupBox("Segmentation (Standard only)")
+        seg_form = QFormLayout(self._seg_settings_group)
+
         self._default_seg_cb = QCheckBox(
             "Use Azure default segmentation (semantic always on)"
         )
@@ -221,7 +239,7 @@ class SettingsDialog(QDialog):
             "Azure — the service uses its defaults. Semantic segmentation stays on."
         )
         self._default_seg_cb.toggled.connect(self._on_default_seg_toggled_settings)
-        aform.addRow("", self._default_seg_cb)
+        seg_form.addRow("", self._default_seg_cb)
 
         self._seg_timeout_spin = QSpinBox()
         self._seg_timeout_spin.setRange(100, 5000)
@@ -234,7 +252,7 @@ class SettingsDialog(QDialog):
             "speakers who rarely pause).\n"
             "Higher values → fewer, longer utterances."
         )
-        aform.addRow("Segmentation silence:", self._seg_timeout_spin)
+        seg_form.addRow("Segmentation silence:", self._seg_timeout_spin)
 
         self._auto_seg_cb = QCheckBox("Auto-adjust segmentation timeout")
         self._auto_seg_cb.setToolTip(
@@ -244,23 +262,23 @@ class SettingsDialog(QDialog):
             "cuts audio on the application side."
         )
         self._auto_seg_cb.toggled.connect(self._on_auto_seg_toggled)
-        aform.addRow("", self._auto_seg_cb)
+        seg_form.addRow("", self._auto_seg_cb)
 
         self._auto_seg_min_spin = QDoubleSpinBox()
         self._auto_seg_min_spin.setRange(1.0, 30.0)
         self._auto_seg_min_spin.setSingleStep(1.0)
         self._auto_seg_min_spin.setDecimals(1)
         self._auto_seg_min_spin.setSuffix(" s")
-        aform.addRow("Target min duration:", self._auto_seg_min_spin)
+        seg_form.addRow("Target min duration:", self._auto_seg_min_spin)
 
         self._auto_seg_max_spin = QDoubleSpinBox()
         self._auto_seg_max_spin.setRange(5.0, 55.0)
         self._auto_seg_max_spin.setSingleStep(1.0)
         self._auto_seg_max_spin.setDecimals(1)
         self._auto_seg_max_spin.setSuffix(" s")
-        aform.addRow("Target max duration:", self._auto_seg_max_spin)
+        seg_form.addRow("Target max duration:", self._auto_seg_max_spin)
 
-        layout.addWidget(audio_group)
+        layout.addWidget(self._seg_settings_group)
         layout.addStretch()
         return w
 
@@ -288,23 +306,24 @@ class SettingsDialog(QDialog):
             self._voice_browser.set_azure_service(azure)
         layout.addWidget(self._voice_browser)
 
-        form = QFormLayout()
+        self._voice_tuning_group = QGroupBox("Voice Tuning (Standard only)")
+        vt_form = QFormLayout(self._voice_tuning_group)
 
         self._rate_spin = QDoubleSpinBox()
         self._rate_spin.setRange(0.5, 2.0)
         self._rate_spin.setSingleStep(0.1)
         self._rate_spin.setDecimals(1)
-        form.addRow("Speaking rate:", self._rate_spin)
+        vt_form.addRow("Speaking rate:", self._rate_spin)
 
         self._pitch_edit = QLineEdit()
         self._pitch_edit.setPlaceholderText("+0%")
-        form.addRow("Pitch:", self._pitch_edit)
+        vt_form.addRow("Pitch:", self._pitch_edit)
 
         self._volume_spin = QSpinBox()
         self._volume_spin.setRange(0, 100)
-        form.addRow("TTS volume:", self._volume_spin)
+        vt_form.addRow("TTS volume:", self._volume_spin)
 
-        layout.addLayout(form)
+        layout.addWidget(self._voice_tuning_group)
         layout.addStretch()
         return w
 
@@ -443,6 +462,7 @@ class SettingsDialog(QDialog):
         self._region_var_edit.setText(cfg.speech_region_env_var)
 
         # Translation
+        self._select_combo_data(self._mode_combo, cfg.translation_mode)
         self._select_combo_data(self._source_combo, cfg.source_language)
         self._select_combo_data(self._target_combo, cfg.target_language)
         self._select_combo_data(self._profanity_combo, cfg.profanity_filter)
@@ -453,6 +473,7 @@ class SettingsDialog(QDialog):
         self._auto_seg_cb.setChecked(cfg.auto_segmentation_enabled)
         self._auto_seg_min_spin.setValue(cfg.auto_seg_target_min_s)
         self._auto_seg_max_spin.setValue(cfg.auto_seg_target_max_s)
+        self._refresh_settings_mode_visibility()
         self._sync_default_seg_dependencies()
 
         # Voice
@@ -500,6 +521,7 @@ class SettingsDialog(QDialog):
             speech_key_env_var=self._key_var_edit.text().strip(),
             speech_region_env_var=self._region_var_edit.text().strip(),
             # Translation
+            translation_mode=self._mode_combo.currentData(),
             source_language=self._source_combo.currentData(),
             target_language=self._target_combo.currentData(),
             profanity_filter=self._profanity_combo.currentData(),
@@ -598,6 +620,15 @@ class SettingsDialog(QDialog):
         auto_on = custom and self._auto_seg_cb.isChecked()
         self._auto_seg_min_spin.setEnabled(auto_on)
         self._auto_seg_max_spin.setEnabled(auto_on)
+
+    def _on_mode_changed_settings(self, _index: int) -> None:
+        self._refresh_settings_mode_visibility()
+
+    def _refresh_settings_mode_visibility(self) -> None:
+        is_standard = self._mode_combo.currentData() == "standard"
+        self._seg_settings_group.setVisible(is_standard)
+        self._voice_tuning_group.setVisible(is_standard)
+        self._source_combo.setEnabled(is_standard)
 
     def _on_check_updates_clicked(self) -> None:
         main_win = self.parent()

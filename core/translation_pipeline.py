@@ -71,6 +71,8 @@ class TranslationPipeline(QObject):
             self.error_occurred.emit("Azure credentials are missing. Check .env file.")
             return
 
+        interpreter = cfg.translation_mode == "interpreter"
+
         self._azure = AzureTranslationService(
             speech_key=key,
             speech_region=region,
@@ -87,7 +89,14 @@ class TranslationPipeline(QObject):
             self._on_segmentation_timeout_updated
         )
 
-        self._azure.build_synthesizer()
+        if interpreter:
+            self._open_audio_output()
+            self._azure.on_synthesized_audio.connect(self._on_interpreter_audio)
+        else:
+            self._azure.build_synthesizer()
+            self._tts_queue = queue.Queue()
+            self._tts_thread = threading.Thread(target=self._tts_worker, daemon=True)
+            self._tts_thread.start()
 
         # Transcript writer
         if cfg.save_transcripts and cfg.transcript_directory:
@@ -106,18 +115,13 @@ class TranslationPipeline(QObject):
             except Exception:
                 logger.exception("Failed to create transcript writer")
 
-        # TTS worker thread
-        self._tts_queue = queue.Queue()
-        self._tts_thread = threading.Thread(target=self._tts_worker, daemon=True)
-        self._tts_thread.start()
-
         self._is_running = True
-        # Start Azure recognition (callbacks may arrive immediately)
         self._azure.start_recognition()
         self._monitor.start_session()
         self._reconnect_attempts = 0
 
-        self.status_changed.emit("Translation started")
+        mode_label = "Live Interpreter" if interpreter else "Standard"
+        self.status_changed.emit(f"Translation started ({mode_label})")
         self.connection_changed.emit(True)
 
     def stop(self) -> None:
@@ -129,17 +133,15 @@ class TranslationPipeline(QObject):
 
         az = self._azure
         if az:
-            # Block SDK handlers and auto-segmentation restarts before stopping,
-            # so queued Qt events cannot enqueue TTS after this point.
             az.notify_pipeline_stopping()
             az.stop_recognition()
 
-        # Drain TTS queue (utterances already queued are still synthesized)
-        self._tts_queue.put(None)
-        if self._tts_thread and self._tts_thread.is_alive():
-            self._tts_thread.join(timeout=5)
+        if self._tts_thread is not None:
+            self._tts_queue.put(None)
+            if self._tts_thread.is_alive():
+                self._tts_thread.join(timeout=5)
+            self._tts_thread = None
 
-        # Close transcript
         if self._transcript:
             self._transcript.close(avg_lag_ms=self._monitor.avg_lag_ms)
             self._transcript = None
@@ -165,7 +167,10 @@ class TranslationPipeline(QObject):
                 self._on_segmentation_timeout_updated
             )
         except TypeError:
-            # No matching connection (e.g. partial teardown)
+            pass
+        try:
+            az.on_synthesized_audio.disconnect(self._on_interpreter_audio)
+        except TypeError:
             pass
 
     def _on_azure_connected(self) -> None:
@@ -238,6 +243,8 @@ class TranslationPipeline(QObject):
         az = self._azure
         if not self._is_running or az is None:
             return
+        if self._cfg.config.translation_mode == "interpreter":
+            return
 
         def _restart() -> None:
             try:
@@ -253,11 +260,47 @@ class TranslationPipeline(QObject):
             name="bcb-segmentation-restart",
         ).start()
 
+    def _open_audio_output(self) -> None:
+        """Open output streams without building a SpeechSynthesizer."""
+        cfg = self._cfg.config
+        out_dev = self._audio_router.find_device_by_name(
+            cfg.output_device_name, DeviceDirection.OUTPUT
+        )
+        sec_dev = self._audio_router.find_device_by_name(
+            cfg.secondary_output_device_name, DeviceDirection.OUTPUT
+        )
+        primary_id = out_dev.device_id if out_dev else None
+        secondary_id = sec_dev.device_id if sec_dev else None
+        self._audio_router.open_output_streams(
+            primary_device_id=primary_id,
+            secondary_device_id=secondary_id,
+            sample_rate=cfg.sample_rate,
+            channels=cfg.channels,
+        )
+
+    def _on_interpreter_audio(self, pcm_data: bytes) -> None:
+        if self._is_running:
+            self._audio_router.write_output(pcm_data)
+
     # -- internal: translation callback ------------------------------------
 
     def _on_translated(self, source: str, translated: str, timestamp: float) -> None:
         if not self._is_running:
             return
+
+        if self._cfg.config.translation_mode == "interpreter":
+            lag_ms = int((time.monotonic() - timestamp) * 1000)
+            self._monitor.record_utterance(Utterance(
+                text=translated,
+                source_text=source,
+                recognized_at=timestamp,
+                synthesis_done_at=time.monotonic(),
+            ))
+            self.utterance_complete.emit(source, translated, lag_ms)
+            if self._transcript:
+                self._transcript.write(source, translated, lag_ms)
+            return
+
         utterance = Utterance(
             text=translated,
             source_text=source,
@@ -268,11 +311,10 @@ class TranslationPipeline(QObject):
         cfg = self._cfg.config
         depth = self._tts_queue.qsize()
 
-        # Handle overflow
         if depth >= cfg.max_tts_queue_size:
             if cfg.drop_oldest_on_overflow:
                 try:
-                    dropped = self._tts_queue.get_nowait()
+                    self._tts_queue.get_nowait()
                     self._monitor.record_drop()
                     self.status_changed.emit(
                         f"Dropped oldest utterance (queue full at {depth})"

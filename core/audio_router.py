@@ -28,6 +28,7 @@ class AudioRouter:
         self._output_streams: list[sd.RawOutputStream] = []
         self._tts_pcm_buffer = bytearray()
         self._tts_buffer_cond = threading.Condition()
+        self._pcm_odd_byte: int | None = None
         self._playback_stop = False
         self._output_frame_bytes = 2
         self._output_chunk_bytes = self._TTS_PLAYBACK_CHUNK_FRAMES * 2
@@ -270,6 +271,7 @@ class AudioRouter:
         if self._output_streams:
             with self._tts_buffer_cond:
                 self._tts_pcm_buffer.clear()
+                self._pcm_odd_byte = None
                 self._playback_stop = False
             self._playback_thread = threading.Thread(
                 target=self._output_playback_worker,
@@ -395,7 +397,24 @@ class AudioRouter:
             except Exception:
                 logger.debug("Output stream write error", exc_info=True)
 
+    def _align_int16_pcm(self, pcm_data: bytes) -> bytes:
+        """Ensure an even byte length so int16 samples stay frame-aligned.
+
+        Odd-length chunks from speech SDKs (or WAV-strip edge cases) shift
+        sample boundaries and cause severe crackling and pops.
+        """
+        if not pcm_data:
+            return b""
+        if self._pcm_odd_byte is not None:
+            pcm_data = bytes((self._pcm_odd_byte,)) + pcm_data
+            self._pcm_odd_byte = None
+        if len(pcm_data) % 2:
+            self._pcm_odd_byte = pcm_data[-1]
+            pcm_data = pcm_data[:-1]
+        return pcm_data
+
     def write_output(self, pcm_data: bytes) -> None:
+        pcm_data = self._align_int16_pcm(pcm_data)
         # Notify listeners FIRST so WebRTC buffers receive data before the
         # playback queue (same ordering as before the playback thread existed).
         with self._output_listeners_lock:
@@ -432,6 +451,7 @@ class AudioRouter:
             self._playback_thread = None
             with self._tts_buffer_cond:
                 self._tts_pcm_buffer.clear()
+                self._pcm_odd_byte = None
                 self._playback_stop = False
 
         with self._output_device_lock:

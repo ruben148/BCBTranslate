@@ -8,6 +8,7 @@ from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -234,6 +235,19 @@ class MainWindow(QMainWindow):
         ts_inner.setContentsMargins(12, 0, 12, 8)
         ts_inner.setSpacing(8)
 
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Mode:"))
+        self._mode_combo = QComboBox()
+        self._mode_combo.addItem("Standard", "standard")
+        self._mode_combo.addItem("Live Interpreter", "interpreter")
+        cur_mode = self._cfg.config.translation_mode
+        idx = self._mode_combo.findData(cur_mode)
+        if idx >= 0:
+            self._mode_combo.setCurrentIndex(idx)
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        mode_row.addWidget(self._mode_combo, 1)
+        ts_inner.addLayout(mode_row)
+
         lang_group = QGroupBox("Language")
         lang_layout = QHBoxLayout(lang_group)
 
@@ -258,7 +272,8 @@ class MainWindow(QMainWindow):
 
         ts_inner.addWidget(lang_group)
 
-        seg_group = QGroupBox("Segmentation")
+        self._seg_group = QGroupBox("Segmentation")
+        seg_group = self._seg_group
         seg_layout = QVBoxLayout(seg_group)
 
         self._default_seg_cb = QCheckBox(
@@ -329,7 +344,8 @@ class MainWindow(QMainWindow):
 
         ts_inner.addWidget(seg_group)
 
-        tune_group = QGroupBox("Voice Tuning")
+        self._tune_group = QGroupBox("Voice Tuning")
+        tune_group = self._tune_group
         tuning_layout = QVBoxLayout(tune_group)
 
         speed_row = QHBoxLayout()
@@ -368,6 +384,7 @@ class MainWindow(QMainWindow):
         self._translation_section_toggle.setChecked(ts_exp)
         self._translation_section_toggle.blockSignals(False)
         self._refresh_translation_section_toggle_label()
+        self._refresh_mode_dependent_visibility()
 
         controls_layout.addWidget(translation_outer)
 
@@ -548,6 +565,20 @@ class MainWindow(QMainWindow):
         self._cfg.set("translation_section_expanded", expanded)
         self._refresh_translation_section_toggle_label()
 
+    # -- mode selector -------------------------------------------------------
+
+    def _on_mode_changed(self, _index: int) -> None:
+        mode = self._mode_combo.currentData()
+        self._cfg.set("translation_mode", mode)
+        self._cfg.save()
+        self._refresh_mode_dependent_visibility()
+
+    def _refresh_mode_dependent_visibility(self) -> None:
+        is_standard = self._cfg.config.translation_mode == "standard"
+        self._seg_group.setVisible(is_standard)
+        self._tune_group.setVisible(is_standard)
+        self._mode_combo.setEnabled(not self._pipeline.is_running)
+
     # -- segmentation controls -----------------------------------------------
 
     def _refresh_segmentation_controls_enabled(self) -> None:
@@ -609,6 +640,8 @@ class MainWindow(QMainWindow):
             self._start_btn.setText("STOP")
             self._start_btn.setProperty("running", True)
             self._tray.set_running(True)
+
+        self._mode_combo.setEnabled(not self._pipeline.is_running)
 
         # Force style update for the dynamic property
         self._start_btn.style().unpolish(self._start_btn)
@@ -679,6 +712,14 @@ class MainWindow(QMainWindow):
             self._pitch_slider.setValue(self._parse_pitch(self._cfg.config.pitch))
             self._gain_slider.setValue(int(self._cfg.config.input_gain * 10))
             self._audio_router.gain = self._cfg.config.input_gain
+
+            # Sync mode combo
+            self._mode_combo.blockSignals(True)
+            midx = self._mode_combo.findData(self._cfg.config.translation_mode)
+            if midx >= 0:
+                self._mode_combo.setCurrentIndex(midx)
+            self._mode_combo.blockSignals(False)
+            self._refresh_mode_dependent_visibility()
 
             # Sync segmentation controls
             self._default_seg_cb.blockSignals(True)

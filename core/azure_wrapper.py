@@ -11,6 +11,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from core.audio_router import AudioRouter
 from core.models import AppConfig, DeviceDirection
 from utils.ssml_builder import SSMLBuilder
+from utils.wav_pcm import extract_pcm_from_synthesis_chunk, flush_synthesis_buffer
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ class AzureTranslationService(QObject):
 
     on_translated = pyqtSignal(str, str, float)   # source, translated, timestamp
     on_recognizing = pyqtSignal(str)               # partial result
+    on_synthesized_audio = pyqtSignal(bytes)        # raw PCM from interpreter mode
     on_error = pyqtSignal(str)
     on_connected = pyqtSignal()
     on_disconnected = pyqtSignal()
@@ -119,6 +121,7 @@ class AzureTranslationService(QObject):
             target_max_s=config.auto_seg_target_max_s,
             initial_timeout_ms=config.segmentation_silence_timeout_ms,
         )
+        self._interp_synth_buf = bytearray()
 
     # -- recognition (STT + translation) -----------------------------------
 
@@ -189,7 +192,17 @@ class AzureTranslationService(QObject):
         else:
             logger.info(log_msg)
 
+    @property
+    def is_interpreter_mode(self) -> bool:
+        return self._config.translation_mode == "interpreter"
+
     def _build_recognizer(self) -> None:
+        if self.is_interpreter_mode:
+            self._build_recognizer_interpreter()
+        else:
+            self._build_recognizer_standard()
+
+    def _build_recognizer_standard(self) -> None:
         translation_config = speechsdk.translation.SpeechTranslationConfig(
             subscription=self._speech_key,
             region=self._speech_region,
@@ -229,7 +242,46 @@ class AzureTranslationService(QObject):
             translation_config=translation_config,
             audio_config=audio_config,
         )
+        self._wire_recognizer_events()
 
+    def _build_recognizer_interpreter(self) -> None:
+        v2_url = (
+            f"wss://{self._speech_region}"
+            f".stt.speech.microsoft.com/speech/universal/v2"
+        )
+        translation_config = speechsdk.translation.SpeechTranslationConfig(
+            endpoint=v2_url,
+            subscription=self._speech_key,
+        )
+        translation_config.add_target_language(self._config.target_language)
+
+        translation_config.voice_name = self._config.voice_name
+        translation_config.set_speech_synthesis_output_format(
+            speechsdk.SpeechSynthesisOutputFormat.Raw16Khz16BitMonoPcm,
+        )
+
+        profanity = self._config.profanity_filter
+        if profanity == "removed":
+            translation_config.set_profanity(speechsdk.ProfanityOption.Removed)
+        elif profanity == "raw":
+            translation_config.set_profanity(speechsdk.ProfanityOption.Raw)
+        else:
+            translation_config.set_profanity(speechsdk.ProfanityOption.Masked)
+
+        auto_detect = speechsdk.languageconfig.AutoDetectSourceLanguageConfig()
+        audio_config = self._build_input_audio_config()
+
+        self._interp_synth_buf.clear()
+
+        self._recognizer = speechsdk.translation.TranslationRecognizer(
+            translation_config=translation_config,
+            auto_detect_source_language_config=auto_detect,
+            audio_config=audio_config,
+        )
+        self._wire_recognizer_events()
+        self._recognizer.synthesizing.connect(self._on_synthesizing)
+
+    def _wire_recognizer_events(self) -> None:
         self._recognizer.recognized.connect(self._on_recognized)
         self._recognizer.recognizing.connect(self._on_recognizing)
         self._recognizer.canceled.connect(self._on_canceled)
@@ -319,11 +371,29 @@ class AzureTranslationService(QObject):
                 self.on_translated.emit(source, translated, ts)
 
             if (
-                self._config.auto_segmentation_enabled
+                not self.is_interpreter_mode
+                and self._config.auto_segmentation_enabled
                 and not self._config.use_default_segmentation
             ):
                 duration_s = evt.result.duration / TICKS_PER_SECOND
                 self._evaluate_auto_segmentation(duration_s)
+
+    def _on_synthesizing(
+        self, evt: speechsdk.translation.TranslationSynthesisEventArgs,
+    ) -> None:
+        if not self._accept_events:
+            return
+        audio = evt.result.audio
+        if not audio or len(audio) == 0:
+            tail = flush_synthesis_buffer(self._interp_synth_buf)
+            if tail:
+                self.on_synthesized_audio.emit(tail)
+            return
+        pcm = extract_pcm_from_synthesis_chunk(
+            self._interp_synth_buf, bytes(audio),
+        )
+        if pcm:
+            self.on_synthesized_audio.emit(pcm)
 
     def _on_recognizing(self, evt: speechsdk.translation.TranslationRecognitionEventArgs):
         if not self._accept_events:
@@ -506,6 +576,7 @@ class AzureTranslationService(QObject):
     def notify_pipeline_stopping(self) -> None:
         """Called by TranslationPipeline as soon as Stop is requested."""
         self._accept_events = False
+        self._interp_synth_buf.clear()
 
     def shutdown(self) -> None:
         self._accept_events = False
