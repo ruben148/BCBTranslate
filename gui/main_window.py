@@ -478,14 +478,20 @@ class MainWindow(QMainWindow):
         name = dev.name if dev else None
         self._cfg.set("input_device_name", name)
         self._start_vu_monitor()
+        if self._pipeline.is_running:
+            self._pipeline.apply_input_device_change()
 
     def _on_output_device_changed(self, dev) -> None:
         name = dev.name if dev else None
         self._cfg.set("output_device_name", name)
+        if self._pipeline.is_running:
+            self._pipeline.apply_output_device_change()
 
     def _on_secondary_device_changed(self, dev) -> None:
         name = dev.name if dev else None
         self._cfg.set("secondary_output_device_name", name)
+        if self._pipeline.is_running:
+            self._pipeline.apply_output_device_change()
 
     # -- VU meter ----------------------------------------------------------
 

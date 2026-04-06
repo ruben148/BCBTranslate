@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import queue
 import threading
 from typing import Callable
 
@@ -18,13 +17,20 @@ class AudioRouter:
 
     _INPUT_RATE = 48_000
     _INPUT_BLOCKSIZE = 960  # 20 ms at 48 kHz
+    # Azure TTS often delivers ~0.5s PCM bursts; feeding PortAudio in small
+    # steady blocks keeps the host buffer full between bursts.
+    _TTS_PLAYBACK_CHUNK_FRAMES = 480  # 30 ms at 16 kHz mono
 
     def __init__(self):
         self._input_stream: sd.InputStream | None = None
         self._input_device_id: int | None = None
         self._vu_active = False
         self._output_streams: list[sd.RawOutputStream] = []
-        self._output_queue: queue.Queue[bytes | None] = queue.Queue()
+        self._tts_pcm_buffer = bytearray()
+        self._tts_buffer_cond = threading.Condition()
+        self._playback_stop = False
+        self._output_frame_bytes = 2
+        self._output_chunk_bytes = self._TTS_PLAYBACK_CHUNK_FRAMES * 2
         self._playback_thread: threading.Thread | None = None
         self._vu_callback: Callable[[float], None] | None = None
         self._vu_lock = threading.Lock()
@@ -32,6 +38,7 @@ class AudioRouter:
         self._gain: float = 1.0
         self._output_listeners: list[Callable[[bytes], None]] = []
         self._output_listeners_lock = threading.Lock()
+        self._output_device_lock = threading.Lock()
         self._input_listeners: list[Callable] = []
         self._input_listeners_lock = threading.Lock()
 
@@ -215,6 +222,31 @@ class AudioRouter:
 
     # -- output streams for dual output ------------------------------------
 
+    def _create_output_streams(
+        self,
+        primary_device_id: int | None,
+        secondary_device_id: int | None,
+        sample_rate: int,
+        channels: int,
+    ) -> list[sd.RawOutputStream]:
+        device_ids = [primary_device_id]
+        if secondary_device_id is not None:
+            device_ids.append(secondary_device_id)
+        streams: list[sd.RawOutputStream] = []
+        for dev_id in device_ids:
+            try:
+                stream = self._open_tts_raw_output_stream(
+                    device_id=dev_id,
+                    sample_rate=sample_rate,
+                    channels=channels,
+                )
+                stream.start()
+                streams.append(stream)
+                logger.info("Output stream opened (device=%s)", dev_id)
+            except Exception:
+                logger.exception("Failed to open output stream (device=%s)", dev_id)
+        return streams
+
     def open_output_streams(
         self,
         primary_device_id: int | None,
@@ -223,27 +255,22 @@ class AudioRouter:
         channels: int = 1,
     ) -> None:
         self.close_output_streams()
-        device_ids = [primary_device_id]
-        if secondary_device_id is not None:
-            device_ids.append(secondary_device_id)
-        for dev_id in device_ids:
-            try:
-                stream = sd.RawOutputStream(
-                    device=dev_id,
-                    samplerate=sample_rate,
-                    channels=channels,
-                    dtype="int16",
-                    # Larger host buffer absorbs irregular Azure chunk timing; writing
-                    # from a dedicated thread avoids blocking the SDK push callback.
-                    latency="high",
-                )
-                stream.start()
-                self._output_streams.append(stream)
-                logger.info("Output stream opened (device=%s)", dev_id)
-            except Exception:
-                logger.exception("Failed to open output stream (device=%s)", dev_id)
+        self._output_frame_bytes = 2 * max(1, channels)
+        self._output_chunk_bytes = self._TTS_PLAYBACK_CHUNK_FRAMES * channels * 2
+
+        streams = self._create_output_streams(
+            primary_device_id,
+            secondary_device_id,
+            sample_rate,
+            channels,
+        )
+        with self._output_device_lock:
+            self._output_streams = streams
 
         if self._output_streams:
+            with self._tts_buffer_cond:
+                self._tts_pcm_buffer.clear()
+                self._playback_stop = False
             self._playback_thread = threading.Thread(
                 target=self._output_playback_worker,
                 daemon=True,
@@ -251,20 +278,119 @@ class AudioRouter:
             )
             self._playback_thread.start()
 
+    def switch_output_streams(
+        self,
+        primary_device_id: int | None,
+        secondary_device_id: int | None = None,
+        sample_rate: int = 16000,
+        channels: int = 1,
+    ) -> None:
+        """Rebind TTS playback to new device(s) without stopping the playback thread.
+
+        Used when the operator changes output while translation is running. The
+        jitter buffer and Azure push callback stay attached; only PortAudio
+        sinks are replaced.
+        """
+        self._output_frame_bytes = 2 * max(1, channels)
+        self._output_chunk_bytes = self._TTS_PLAYBACK_CHUNK_FRAMES * channels * 2
+
+        if self._playback_thread is None or not self._playback_thread.is_alive():
+            self.open_output_streams(
+                primary_device_id,
+                secondary_device_id,
+                sample_rate,
+                channels,
+            )
+            return
+
+        new_streams = self._create_output_streams(
+            primary_device_id,
+            secondary_device_id,
+            sample_rate,
+            channels,
+        )
+        if not new_streams:
+            logger.error(
+                "switch_output_streams: could not open any device; "
+                "keeping previous output streams"
+            )
+            return
+
+        with self._output_device_lock:
+            old = self._output_streams
+            self._output_streams = new_streams
+
+        for stream in old:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:
+                logger.debug("Error closing old output stream", exc_info=True)
+
+    @staticmethod
+    def _open_tts_raw_output_stream(
+        *,
+        device_id: int | None,
+        sample_rate: int,
+        channels: int,
+    ) -> sd.RawOutputStream:
+        """Open output with a large target latency so ~500ms gaps between Azure
+        chunks do not empty the driver buffer."""
+        common = dict(
+            device=device_id,
+            samplerate=sample_rate,
+            channels=channels,
+            dtype="int16",
+            blocksize=AudioRouter._TTS_PLAYBACK_CHUNK_FRAMES,
+        )
+        try:
+            return sd.RawOutputStream(**common, latency=1.0)
+        except Exception:
+            logger.debug(
+                "1.0s output latency not accepted; falling back to high/default",
+                exc_info=True,
+            )
+        try:
+            return sd.RawOutputStream(**common, latency="high")
+        except Exception:
+            return sd.RawOutputStream(**common)
+
     def _output_playback_worker(self) -> None:
-        """Drain queued PCM into PortAudio. Runs on a dedicated thread so the
-        Azure PushAudioOutputStream callback never blocks on ``stream.write``."""
+        """Feed PortAudio in fixed small blocks from a jitter buffer so playback
+        stays continuous when the Azure SDK delivers audio in large bursts."""
+        chunk_b = self._output_chunk_bytes
+        frame_b = self._output_frame_bytes
+
         while True:
-            item = self._output_queue.get()
-            if item is None:
-                break
-            if not item:
+            raw: bytes | None = None
+            with self._tts_buffer_cond:
+                while True:
+                    if self._playback_stop and len(self._tts_pcm_buffer) == 0:
+                        return
+                    buflen = len(self._tts_pcm_buffer)
+                    if buflen >= chunk_b:
+                        raw = bytes(self._tts_pcm_buffer[:chunk_b])
+                        del self._tts_pcm_buffer[:chunk_b]
+                        break
+                    if self._playback_stop and buflen >= frame_b:
+                        aligned = (buflen // frame_b) * frame_b
+                        raw = bytes(self._tts_pcm_buffer[:aligned])
+                        del self._tts_pcm_buffer[:aligned]
+                        break
+                    if self._playback_stop:
+                        self._tts_pcm_buffer.clear()
+                        return
+                    self._tts_buffer_cond.wait(timeout=0.05)
+
+            if not raw:
                 continue
             try:
-                audio_array = np.frombuffer(item, dtype=np.int16)
+                audio_array = np.frombuffer(raw, dtype=np.int16)
                 if audio_array.size == 0:
                     continue
-                for stream in self._output_streams:
+                with self._output_device_lock:
+                    streams = list(self._output_streams)
+                for stream in streams:
                     stream.write(audio_array)
             except Exception:
                 logger.debug("Output stream write error", exc_info=True)
@@ -283,7 +409,9 @@ class AudioRouter:
             return
         if self._playback_thread is None or not self._playback_thread.is_alive():
             return
-        self._output_queue.put(pcm_data)
+        with self._tts_buffer_cond:
+            self._tts_pcm_buffer.extend(pcm_data)
+            self._tts_buffer_cond.notify_all()
 
     def add_output_listener(self, callback: Callable[[bytes], None]) -> None:
         with self._output_listeners_lock:
@@ -297,22 +425,24 @@ class AudioRouter:
 
     def close_output_streams(self) -> None:
         if self._playback_thread is not None:
-            try:
-                while True:
-                    self._output_queue.get_nowait()
-            except queue.Empty:
-                pass
-            self._output_queue.put(None)
+            with self._tts_buffer_cond:
+                self._playback_stop = True
+                self._tts_buffer_cond.notify_all()
             self._playback_thread.join(timeout=5.0)
             self._playback_thread = None
+            with self._tts_buffer_cond:
+                self._tts_pcm_buffer.clear()
+                self._playback_stop = False
 
-        for stream in self._output_streams:
+        with self._output_device_lock:
+            to_close = list(self._output_streams)
+            self._output_streams.clear()
+        for stream in to_close:
             try:
                 stream.stop()
                 stream.close()
             except Exception:
                 pass
-        self._output_streams.clear()
 
     # -- cleanup -----------------------------------------------------------
 

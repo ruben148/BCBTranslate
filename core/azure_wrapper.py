@@ -150,6 +150,28 @@ class AzureTranslationService(QObject):
             self.on_disconnected.emit()
             logger.info("Azure recognition stopped")
 
+    def switch_input_device(self) -> None:
+        """Rebind the microphone / line input without stopping TTS or the synthesizer.
+
+        Reads the current ``input_device_name`` from config (already updated by
+        the GUI). Does not emit disconnected/connected — the session stays live.
+        """
+        with self._lock:
+            if not self._is_recognizing or not self._accept_events:
+                return
+            try:
+                if self._recognizer is not None:
+                    self._recognizer.stop_continuous_recognition()
+            except Exception:
+                logger.debug("Error stopping recognizer for input switch", exc_info=True)
+            self._close_input_stream()
+            self._build_recognizer()
+            self._recognizer.start_continuous_recognition()
+        logger.info(
+            "Recognition input switched (device name=%r)",
+            self._config.input_device_name,
+        )
+
     def _build_recognizer(self) -> None:
         translation_config = speechsdk.translation.SpeechTranslationConfig(
             subscription=self._speech_key,

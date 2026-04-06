@@ -10,7 +10,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from core.audio_router import AudioRouter
 from core.azure_wrapper import AzureTranslationService
 from core.config_manager import ConfigManager
-from core.models import AppConfig, TranslationMetrics, Utterance
+from core.models import AppConfig, DeviceDirection, TranslationMetrics, Utterance
 from core.monitor import Monitor
 from utils.transcript_writer import TranscriptWriter
 
@@ -185,13 +185,53 @@ class TranslationPipeline(QObject):
         SSML is built per-utterance from current config values."""
         pass
 
-    def update_audio_devices(self) -> None:
-        """Re-initialize audio devices. Requires restart of the pipeline."""
-        was_running = self._is_running
-        if was_running:
-            self.stop()
-        if was_running:
-            self.start()
+    def apply_input_device_change(self) -> None:
+        """Rebind the capture device used for Azure recognition (no app restart).
+
+        Runs the SDK switch on a worker thread so the GUI stays responsive.
+        """
+        az = self._azure
+        if not self._is_running or az is None:
+            return
+
+        def _switch() -> None:
+            try:
+                az.switch_input_device()
+                self.status_changed.emit("Input device changed")
+            except Exception as exc:
+                logger.exception("Input device switch failed")
+                self.error_occurred.emit(f"Could not switch input device: {exc}")
+
+        threading.Thread(
+            target=_switch,
+            daemon=True,
+            name="bcb-input-switch",
+        ).start()
+
+    def apply_output_device_change(self) -> None:
+        """Rebind TTS playback device(s) without restarting translation."""
+        if not self._is_running:
+            return
+        cfg = self._cfg.config
+        out_dev = self._audio_router.find_device_by_name(
+            cfg.output_device_name, DeviceDirection.OUTPUT
+        )
+        sec_dev = self._audio_router.find_device_by_name(
+            cfg.secondary_output_device_name, DeviceDirection.OUTPUT
+        )
+        primary_id = out_dev.device_id if out_dev else None
+        secondary_id = sec_dev.device_id if sec_dev else None
+        try:
+            self._audio_router.switch_output_streams(
+                primary_device_id=primary_id,
+                secondary_device_id=secondary_id,
+                sample_rate=cfg.sample_rate,
+                channels=cfg.channels,
+            )
+            self.status_changed.emit("Output device changed")
+        except Exception as exc:
+            logger.exception("Output device switch failed")
+            self.error_occurred.emit(f"Could not switch output device: {exc}")
 
     # -- internal: translation callback ------------------------------------
 
