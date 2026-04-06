@@ -49,6 +49,12 @@ class TranslationPipeline(QObject):
 
         self._reconnect_attempts = 0
         self._reconnect_lock = threading.Lock()
+        self._bench_started_at = 0.0
+        self._bench_first_partial_at = 0.0
+        self._bench_first_final_at = 0.0
+        self._bench_first_audio_at = 0.0
+        self._bench_final_count = 0
+        self._bench_log_every = 10
 
     # -- public api --------------------------------------------------------
 
@@ -81,7 +87,7 @@ class TranslationPipeline(QObject):
             parent=self,
         )
         self._azure.on_translated.connect(self._on_translated)
-        self._azure.on_recognizing.connect(self.partial_result.emit)
+        self._azure.on_recognizing.connect(self._on_recognizing)
         self._azure.on_error.connect(self._on_azure_error)
         self._azure.on_connected.connect(self._on_azure_connected)
         self._azure.on_disconnected.connect(self._on_azure_disconnected)
@@ -116,12 +122,21 @@ class TranslationPipeline(QObject):
                 logger.exception("Failed to create transcript writer")
 
         self._is_running = True
+        self._bench_started_at = time.monotonic()
+        self._bench_first_partial_at = 0.0
+        self._bench_first_final_at = 0.0
+        self._bench_first_audio_at = 0.0
+        self._bench_final_count = 0
+        self._audio_router.add_output_listener(self._on_any_output_audio)
         self._azure.start_recognition()
         self._monitor.start_session()
         self._reconnect_attempts = 0
 
         mode_label = "Live Interpreter" if interpreter else "Standard"
         self.status_changed.emit(f"Translation started ({mode_label})")
+        self.status_changed.emit(
+            f"Benchmark active ({mode_label}): first partial/final/audio timings will be logged."
+        )
         self.connection_changed.emit(True)
 
     def stop(self) -> None:
@@ -147,6 +162,8 @@ class TranslationPipeline(QObject):
             self._transcript = None
 
         self._monitor.end_session()
+        self._audio_router.remove_output_listener(self._on_any_output_audio)
+        self._emit_benchmark_summary()
 
         if az:
             self._disconnect_azure_signals(az)
@@ -159,7 +176,7 @@ class TranslationPipeline(QObject):
     def _disconnect_azure_signals(self, az: AzureTranslationService) -> None:
         try:
             az.on_translated.disconnect(self._on_translated)
-            az.on_recognizing.disconnect(self.partial_result.emit)
+            az.on_recognizing.disconnect(self._on_recognizing)
             az.on_error.disconnect(self._on_azure_error)
             az.on_connected.disconnect(self._on_azure_connected)
             az.on_disconnected.disconnect(self._on_azure_disconnected)
@@ -178,6 +195,39 @@ class TranslationPipeline(QObject):
 
     def _on_azure_disconnected(self) -> None:
         self.connection_changed.emit(False)
+
+    def _on_recognizing(self, partial: str) -> None:
+        if self._bench_started_at > 0 and self._bench_first_partial_at == 0.0:
+            self._bench_first_partial_at = time.monotonic()
+            dt = (self._bench_first_partial_at - self._bench_started_at) * 1000
+            self.status_changed.emit(f"Benchmark: first partial at {dt:.0f} ms")
+        self.partial_result.emit(partial)
+
+    def _on_any_output_audio(self, pcm_data: bytes) -> None:
+        if (
+            self._is_running
+            and pcm_data
+            and self._bench_started_at > 0
+            and self._bench_first_audio_at == 0.0
+        ):
+            self._bench_first_audio_at = time.monotonic()
+            dt = (self._bench_first_audio_at - self._bench_started_at) * 1000
+            self.status_changed.emit(f"Benchmark: first audio at {dt:.0f} ms")
+
+    def _emit_benchmark_summary(self) -> None:
+        if self._bench_started_at <= 0:
+            return
+        def _fmt(ts: float) -> str:
+            if ts <= 0:
+                return "n/a"
+            return f"{(ts - self._bench_started_at) * 1000:.0f} ms"
+        self.status_changed.emit(
+            "Benchmark summary: "
+            f"partial={_fmt(self._bench_first_partial_at)}, "
+            f"final={_fmt(self._bench_first_final_at)}, "
+            f"audio={_fmt(self._bench_first_audio_at)}, "
+            f"final_segments={self._bench_final_count}"
+        )
 
     def _on_segmentation_timeout_updated(self, timeout_ms: int, avg_duration: float) -> None:
         self.segmentation_updated.emit(timeout_ms, avg_duration)
@@ -287,6 +337,19 @@ class TranslationPipeline(QObject):
     def _on_translated(self, source: str, translated: str, timestamp: float) -> None:
         if not self._is_running:
             return
+        if self._bench_started_at > 0:
+            self._bench_final_count += 1
+            if self._bench_first_final_at == 0.0:
+                self._bench_first_final_at = time.monotonic()
+                dt = (self._bench_first_final_at - self._bench_started_at) * 1000
+                self.status_changed.emit(f"Benchmark: first final at {dt:.0f} ms")
+            elif self._bench_final_count % self._bench_log_every == 0:
+                m = self._monitor.snapshot()
+                self.status_changed.emit(
+                    f"Benchmark: finals={self._bench_final_count}, "
+                    f"avg_lag={m.avg_lag_ms} ms, current_lag={m.current_lag_ms} ms, "
+                    f"queue={m.queue_depth}"
+                )
 
         if self._cfg.config.translation_mode == "interpreter":
             lag_ms = int((time.monotonic() - timestamp) * 1000)
