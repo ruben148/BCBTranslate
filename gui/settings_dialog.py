@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 from core.audio_router import AudioRouter
 from core.azure_wrapper import AzureTranslationService
 from core.config_manager import ConfigManager
+from gui.widgets.no_scroll_spinbox import NoScrollComboBox
 from gui.widgets.voice_browser import VoiceBrowser
 from version import APP_VERSION, GITHUB_REPO
 
@@ -182,7 +183,7 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(w)
         form = QFormLayout()
 
-        self._mode_combo = QComboBox()
+        self._mode_combo = NoScrollComboBox()
         self._mode_combo.addItem("Standard", "standard")
         self._mode_combo.addItem("Live Interpreter", "interpreter")
         self._mode_combo.setToolTip(

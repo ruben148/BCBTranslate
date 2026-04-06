@@ -8,7 +8,6 @@ from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -31,7 +30,12 @@ from core.webrtc_streamer import WebRTCStreamer
 from gui.settings_dialog import SettingsDialog
 from gui.tray import TrayIcon
 from gui.widgets.device_selector import DeviceSelector
-from gui.widgets.no_scroll_spinbox import NoScrollDoubleSpinBox, NoScrollSlider, NoScrollSpinBox
+from gui.widgets.no_scroll_spinbox import (
+    NoScrollComboBox,
+    NoScrollDoubleSpinBox,
+    NoScrollSlider,
+    NoScrollSpinBox,
+)
 from gui.widgets.lag_indicator import LagIndicator
 from gui.widgets.log_panel import LogPanel
 from gui.widgets.vu_meter import VUMeter
@@ -237,7 +241,7 @@ class MainWindow(QMainWindow):
 
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("Mode:"))
-        self._mode_combo = QComboBox()
+        self._mode_combo = NoScrollComboBox()
         self._mode_combo.addItem("Standard", "standard")
         self._mode_combo.addItem("Live Interpreter", "interpreter")
         cur_mode = self._cfg.config.translation_mode
