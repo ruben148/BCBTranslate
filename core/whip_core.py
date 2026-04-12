@@ -134,58 +134,6 @@ def fix_ice_candidates(sdp: str) -> str:
     return sep.join(result)
 
 
-def prioritize_ice_candidates(sdp: str) -> str:
-    """Reorder ``a=candidate`` lines within each ``m=`` section for WHIP/FFmpeg.
-
-    FFmpeg's WHIP muxer tends to prefer the first workable ICE candidate. Servers
-    often list ``typ host`` (LAN) before ``typ srflx`` / ``typ relay``; when the
-    host path is not reachable from the client (common with cloud SFUs), ICE
-    can fail intermittently and DTLS then reports ``fatal alert`` / session
-    failed.  Putting relay/srflx first improves success rate without changing
-    semantics (same candidates, better order).
-    """
-
-    def _prio(line: str) -> tuple[int, str]:
-        lo = line.lower()
-        # Order: try reflexive / relay paths before local host when multiple exist.
-        if " typ relay " in lo or lo.rstrip().endswith(" typ relay"):
-            return (0, line)
-        if " typ srflx " in lo or lo.rstrip().endswith(" typ srflx"):
-            return (1, line)
-        if " typ prflx " in lo or lo.rstrip().endswith(" typ prflx"):
-            return (2, line)
-        if " typ host " in lo or lo.rstrip().endswith(" typ host"):
-            return (3, line)
-        return (4, line)
-
-    sep = "\r\n" if "\r\n" in sdp else "\n"
-    lines = sdp.split(sep)
-    out: list[str] = []
-    i = 0
-    n = len(lines)
-    while i < n:
-        line = lines[i]
-        out.append(line)
-        if line.startswith("m="):
-            i += 1
-            section: list[str] = []
-            while i < n and not lines[i].startswith("m="):
-                section.append(lines[i])
-                i += 1
-            cand_idx = [
-                j for j, L in enumerate(section) if L.startswith("a=candidate:")
-            ]
-            if len(cand_idx) >= 2:
-                extracted = [section[j] for j in cand_idx]
-                ordered = sorted(extracted, key=_prio)
-                for pos, j in enumerate(cand_idx):
-                    section[j] = ordered[pos]
-            out.extend(section)
-            continue
-        i += 1
-    return sep.join(out)
-
-
 def whip_post_offer(url: str, sdp: str, token: str) -> tuple[str, str | None]:
     """POST SDP offer; return (answer_sdp, location_or_none)."""
     headers = {"Content-Type": "application/sdp"}
@@ -308,7 +256,7 @@ class WHIPProxy:
                     self.wfile.write(str(exc).encode())
                     return
 
-                fixed_sdp = prioritize_ice_candidates(fix_ice_candidates(answer_sdp))
+                fixed_sdp = fix_ice_candidates(answer_sdp)
 
                 if location:
                     if location.startswith("http"):

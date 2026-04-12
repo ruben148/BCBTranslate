@@ -11,7 +11,6 @@ import pytest
 from core.whip_core import (
     fix_ice_candidates,
     is_ip_address,
-    prioritize_ice_candidates,
     resolve_sdp_hostnames,
     whip_delete_resource,
     whip_post_offer,
@@ -32,35 +31,6 @@ def test_fix_ice_candidates_keeps_all_private_when_no_public() -> None:
     out = fix_ice_candidates(sdp)
     assert "192.168.0.5" in out
     assert "10.0.0.1" in out
-
-
-def test_prioritize_ice_candidates_prefers_srflx_before_host() -> None:
-    sdp = (
-        "v=0\r\n"
-        "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
-        "a=candidate:1 1 UDP 2130706431 192.168.0.5 12345 typ host\r\n"
-        "a=candidate:2 1 UDP 1694498815 198.51.100.1 9 typ srflx raddr 0.0.0.0 rport 0\r\n"
-    )
-    out = prioritize_ice_candidates(sdp)
-    lines = [ln for ln in out.split("\r\n") if ln.startswith("a=candidate:")]
-    assert lines[0].startswith("a=candidate:2")
-    assert "srflx" in lines[0]
-    assert lines[1].startswith("a=candidate:1")
-
-
-def test_prioritize_ice_candidates_prefers_relay_first() -> None:
-    sdp = (
-        "v=0\r\n"
-        "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
-        "a=candidate:1 1 UDP 2130706431 10.0.0.1 1111 typ host\r\n"
-        "a=candidate:2 1 UDP 1694498815 198.51.100.2 2222 typ srflx raddr 0.0.0.0 rport 0\r\n"
-        "a=candidate:3 1 UDP 16777215 203.0.113.1 3333 typ relay raddr 0.0.0.0 rport 0\r\n"
-    )
-    out = prioritize_ice_candidates(sdp)
-    lines = [ln for ln in out.split("\r\n") if ln.startswith("a=candidate:")]
-    assert "relay" in lines[0]
-    assert "srflx" in lines[1]
-    assert "host" in lines[2]
 
 
 def test_fix_ice_candidates_drops_private_when_public_present() -> None:
