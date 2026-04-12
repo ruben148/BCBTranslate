@@ -273,6 +273,36 @@ QStatusBar {
     font-size: 12px;
 }
 
+/* Main window: translation running indicator (status bar, right side) */
+QPushButton#translationStatusIndicator {
+    min-width: 26px;
+    max-width: 26px;
+    min-height: 12px;
+    max-height: 12px;
+    padding: 0;
+    border-radius: 6px;
+}
+
+QPushButton#translationStatusIndicator[running="false"] {
+    background-color: #3d7a44;
+    border: 1px solid #2e5c32;
+}
+
+QPushButton#translationStatusIndicator[running="false"]:hover {
+    background-color: #4caf50;
+    border: 1px solid #3d7a44;
+}
+
+QPushButton#translationStatusIndicator[running="true"] {
+    background-color: #c62828;
+    border: 1px solid #8e0000;
+}
+
+QPushButton#translationStatusIndicator[running="true"]:hover {
+    background-color: #e53935;
+    border: 1px solid #c62828;
+}
+
 /* Menu */
 QMenu {
     background-color: #313244;

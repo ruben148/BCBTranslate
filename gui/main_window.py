@@ -97,6 +97,7 @@ class MainWindow(QMainWindow):
         self._vu_level_bridge.level_changed.connect(self._vu_meter.set_level)
         self._connect_signals()
         self._apply_theme()
+        self._refresh_translation_status_indicator()
         self._restore_device_selections()
 
         # System tray
@@ -472,6 +473,14 @@ class MainWindow(QMainWindow):
         # ── Status bar ───────────────────────────────────────────────────
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
+        # Small always-visible translation on/off pill (right edge; green = off, red = on)
+        self._translation_status_btn = QPushButton()
+        self._translation_status_btn.setObjectName("translationStatusIndicator")
+        self._translation_status_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._translation_status_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._translation_status_btn.clicked.connect(self.toggle_translation)
+        self._translation_status_btn.setAccessibleName("Translation running indicator")
+        self._status_bar.addPermanentWidget(self._translation_status_btn)
         self._seg_label = QLabel("")
         self._status_bar.addPermanentWidget(self._seg_label)
         self._connection_label = QLabel("Disconnected")
@@ -501,6 +510,7 @@ class MainWindow(QMainWindow):
     def set_theme(self, theme: str) -> None:
         self._cfg.set("theme", theme)
         self._apply_theme()
+        self._refresh_translation_status_indicator()
 
     # -- device selection --------------------------------------------------
 
@@ -650,6 +660,22 @@ class MainWindow(QMainWindow):
         # Force style update for the dynamic property
         self._start_btn.style().unpolish(self._start_btn)
         self._start_btn.style().polish(self._start_btn)
+        self._refresh_translation_status_indicator()
+
+    def _refresh_translation_status_indicator(self) -> None:
+        """Small status-bar pill: green when translation is off, red when running."""
+        running = self._pipeline.is_running
+        self._translation_status_btn.setProperty("running", running)
+        self._translation_status_btn.style().unpolish(self._translation_status_btn)
+        self._translation_status_btn.style().polish(self._translation_status_btn)
+        if running:
+            self._translation_status_btn.setToolTip(
+                "Translation is ON — click to stop"
+            )
+        else:
+            self._translation_status_btn.setToolTip(
+                "Translation is OFF — click to start"
+            )
 
     # -- metrics polling ---------------------------------------------------
 
@@ -709,6 +735,7 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self._cfg, self._audio_router, self._pipeline, parent=self)
         if dlg.exec():
             self._apply_theme()
+            self._refresh_translation_status_indicator()
             self._source_label.setText(self._cfg.config.source_language)
             self._target_label.setText(self._cfg.config.target_language)
             self._voice_label.setText(self._cfg.config.voice_name)
