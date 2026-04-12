@@ -40,6 +40,12 @@ from core.whip_core import (
 
 logger = logging.getLogger(__name__)
 
+# Azure ``SpeechSynthesisOutputFormat.Raw16Khz16BitMonoPcm`` (see ``build_synthesizer``).
+# Translated WebRTC must tag PCM at this rate. ``AppConfig.sample_rate`` also drives
+# PortAudio output device open and may differ, which previously broke FFmpeg/aiortc
+# when the config was not exactly 16 kHz.
+AZURE_TTS_PCM_SAMPLE_RATE = 16000
+
 _CREATIONFLAGS = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
 
 # Pause before opening a new WHIP session after the last one was torn down.
@@ -48,6 +54,8 @@ _CREATIONFLAGS = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDO
 _WHIP_RECONNECT_BASE_SEC = 1.0
 # Extra backoff after a failed connect (capped); see _whip_reconnect_delay_sec.
 _WHIP_RECONNECT_FAILURE_EXTRA_CAP_SEC = 8.0
+# Let the localhost WHIP proxy accept() before FFmpeg opens the WHIP muxer (reduces races on Windows).
+_WHIP_PROXY_READY_SEC = 0.15
 
 
 def _whip_reconnect_delay_sec(connect_failures: int) -> float:
@@ -141,7 +149,10 @@ class AudioBufferTrack(MediaStreamTrack):
     kind = "audio"
     SAMPLE_RATE = 48000
     FRAME_SIZE = SAMPLE_RATE * 20 // 1000  # 960 (20 ms)
-    MAX_BUFFER_MS = 500
+    # Azure TTS invokes ``write_output`` in large bursts (often whole utterances).
+    # A 500 ms cap dropped almost everything except short tail chunks, so listeners
+    # only heard the ends of translations. Keep enough headroom for long utterances.
+    MAX_BUFFER_MS = 60000
 
     def __init__(self) -> None:
         super().__init__()
@@ -431,12 +442,18 @@ class WebRTCStreamer(QObject):
         sample_rate: int,
         gain: float,
     ) -> None:
-        capture_rate = 48000 if audio_source == "original" else sample_rate
+        # Mic capture runs at 48 kHz (see shared input stream). TTS tap is always
+        # 16 kHz mono from the SDK — not ``sample_rate`` (playback device rate).
+        if audio_source == "original":
+            capture_rate = 48000
+        else:
+            capture_rate = AZURE_TTS_PCM_SAMPLE_RATE
 
         self._wait_whip_reconnect_settle()
 
         self._whip_proxy = WHIPProxy(url, token)
         proxy_port = self._whip_proxy.start()
+        time.sleep(_WHIP_PROXY_READY_SEC)
         sid = self._whip_proxy.session_id
         proxy_url = f"http://127.0.0.1:{proxy_port}/"
         self._emit_log(
@@ -721,7 +738,8 @@ class WebRTCStreamer(QObject):
         adapter = TranslatedPcmStereoAdapter(
             mono_sample_rate=capture_rate,
             frame_ms=20.0,
-            max_buffer_seconds=2.0,
+            # Long sentences can exceed 2 s of PCM; do not truncate for FFmpeg.
+            max_buffer_seconds=60.0,
         )
 
         def _on_output(pcm_data: bytes) -> None:
@@ -907,7 +925,7 @@ class WebRTCStreamer(QObject):
         if audio_source == "original":
             self._start_aiortc_original(device_id, sample_rate, gain)
         else:
-            self._start_aiortc_translated(sample_rate)
+            self._start_aiortc_translated()
 
     def _start_aiortc_original(self, device_id, sample_rate, gain):
         rate = AudioBufferTrack.SAMPLE_RATE  # 48 kHz
@@ -930,7 +948,7 @@ class WebRTCStreamer(QObject):
         self._audio_router.add_input_listener(_on_input, device_id=device_id)
         self._emit_log("Capturing mic input (48 kHz, shared stream)", "success")
 
-    def _start_aiortc_translated(self, sample_rate):
+    def _start_aiortc_translated(self) -> None:
         def _on_output(pcm_data: bytes) -> None:
             try:
                 track = self._track
@@ -942,7 +960,7 @@ class WebRTCStreamer(QObject):
                 rms = float(np.sqrt(np.mean(mono_f * mono_f))) if mono_f.size else 0.0
                 self._emit_stream_level_rms(rms)
                 pcm = scaled.astype(np.int16)
-                track.push_audio(pcm, source_rate=sample_rate)
+                track.push_audio(pcm, source_rate=AZURE_TTS_PCM_SAMPLE_RATE)
             except Exception:
                 pass
 
