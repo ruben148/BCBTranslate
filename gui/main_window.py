@@ -665,7 +665,10 @@ class MainWindow(QMainWindow):
     def _refresh_translation_status_indicator(self) -> None:
         """Small status-bar pill: green when translation is off, red when running."""
         running = self._pipeline.is_running
-        self._translation_status_btn.setProperty("running", running)
+        # String property — Qt stylesheets often fail to match bool dynamic properties.
+        self._translation_status_btn.setProperty(
+            "indicatorState", "on" if running else "off"
+        )
         self._translation_status_btn.style().unpolish(self._translation_status_btn)
         self._translation_status_btn.style().polish(self._translation_status_btn)
         if running:

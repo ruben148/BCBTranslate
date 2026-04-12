@@ -283,22 +283,23 @@ QPushButton#translationStatusIndicator {
     border-radius: 6px;
 }
 
-QPushButton#translationStatusIndicator[running="false"] {
+/* off = translation stopped (green); on = running (red) */
+QPushButton#translationStatusIndicator[indicatorState="off"] {
     background-color: #3d7a44;
     border: 1px solid #2e5c32;
 }
 
-QPushButton#translationStatusIndicator[running="false"]:hover {
+QPushButton#translationStatusIndicator[indicatorState="off"]:hover {
     background-color: #4caf50;
     border: 1px solid #3d7a44;
 }
 
-QPushButton#translationStatusIndicator[running="true"] {
+QPushButton#translationStatusIndicator[indicatorState="on"] {
     background-color: #c62828;
     border: 1px solid #8e0000;
 }
 
-QPushButton#translationStatusIndicator[running="true"]:hover {
+QPushButton#translationStatusIndicator[indicatorState="on"]:hover {
     background-color: #e53935;
     border: 1px solid #c62828;
 }
